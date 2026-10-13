@@ -49,6 +49,7 @@ def build_symbol(g):
     main = np.full(n, -1)
     carry = np.full(n, np.nan)
     ret = np.full(n, np.nan)
+    naive = np.full(n, np.nan)   # 像新浪 RB0 那样直接拼接：今天主力价格 / 昨天主力价格 - 1
     cur = -1
     for t in range(n):
         valid = ~np.isnan(C[t]) & (O[t] > 0)
@@ -67,6 +68,8 @@ def build_symbol(g):
             if cand > cur and oi[cand] > oi[cur]:
                 cur = cand
         main[t] = cur
+        if t > 0 and main[t - 1] >= 0:
+            naive[t] = C[t, cur] / C[t - 1, main[t - 1]] - 1
         far = oi.copy()
         far[: cur + 1] = -1
         if far.max() > 0:
@@ -78,6 +81,7 @@ def build_symbol(g):
     out = pd.DataFrame({
         "main": np.where(ok, names[np.maximum(main, 0)], None),
         "ret": ret,
+        "naive_ret": naive,
         "carry": carry,
         "volume": np.where(ok, V[idx, np.maximum(main, 0)], np.nan),
         "close": np.where(ok, C[idx, np.maximum(main, 0)], np.nan),
@@ -92,7 +96,7 @@ def build_panel(df):
     panel.loc[bad, "ret"] = np.nan
     panel.to_parquet(DATA / "main_continuous.parquet", index=False)
     wide = {k: panel.pivot(index="date", columns="symbol", values=k)
-            for k in ["ret", "carry", "volume", "close"]}
+            for k in ["ret", "naive_ret", "carry", "volume", "close"]}
     wide["main"] = panel.pivot(index="date", columns="symbol", values="main")
     return wide, int(bad.sum())
 
@@ -172,7 +176,7 @@ def rank_ic(sig, ret, elig, horizon=5):
     fwd = np.log1p(ret.fillna(0)).rolling(horizon).sum().shift(-horizon - LAG)  # 与回测一致：跳过执行日
     s = sig.where(elig)
     f = fwd.where(s.notna())
-    ok = s.notna().sum(1) >= MIN_N
+    ok = s.notna().sum(axis=1) >= MIN_N
     ic = s[ok].rank(axis=1).corrwith(f[ok].rank(axis=1), axis=1, method="pearson")
     ic = ic.dropna()
     sparse = ic.iloc[::horizon]  # 不重叠样本算 t 值
@@ -183,7 +187,7 @@ def rank_ic(sig, ret, elig, horizon=5):
 
 def zscore(df, elig):
     x = df.where(elig)
-    return x.sub(x.mean(1), axis=0).div(x.std(1), axis=0)
+    return x.sub(x.mean(axis=1), axis=0).div(x.std(axis=1), axis=0)
 
 
 # ---------------------------------------------------------------- 主流程
@@ -208,12 +212,17 @@ def main():
     tables = {}
 
     # 1. 四个策略：净值、汇总指标、逐年收益、当前持仓
-    summary, navs, yearly, daily, last_w = [], [], [], {}, {}
+    summary, navs, yearly, daily, last_w, attrib = [], [], [], {}, {}, []
     for key, (name, sig, mode, hold) in signals.items():
         W = weights(sig, elig, vol, hold, mode)
         bt = run(W, ret)
         daily[key] = bt["net"]
         last_w[key] = W[-1]
+        held = np.vstack([np.zeros((LAG + 1, W.shape[1])), W[:-(LAG + 1)]])  # 与 run() 相同的对齐
+        contrib = (held * np.nan_to_num(ret.values)).sum(axis=0) / len(ret) * 252
+        for j, sym in enumerate(ret.columns):
+            if contrib[j] != 0:
+                attrib.append({"key": key, "symbol": sym, "name": UNIVERSE.get(sym, (sym,))[0], "contrib": contrib[j]})
         full, gross = stats(bt["net"], bt["turnover"]), stats(bt["gross"])
         is_, oos = stats(bt["net"].loc[:SPLIT]), stats(bt["net"].loc[SPLIT:])
         summary.append({"key": key, "name": name, **full, "sharpe_gross": gross["sharpe"],
@@ -227,6 +236,7 @@ def main():
         for y, v in ((1 + bt["net"]).groupby(bt.index.year).prod() - 1).items():
             yearly.append({"key": key, "year": int(y), "ret": v})
     tables["summary"] = pd.DataFrame(summary)
+    tables["attribution"] = pd.DataFrame(attrib)
     tables["nav"] = pd.DataFrame(navs)
     tables["yearly"] = pd.DataFrame(yearly)
     corr = pd.DataFrame(daily).corr()
@@ -279,8 +289,22 @@ def main():
         latest.append(row)
     tables["latest"] = pd.DataFrame(latest)
 
-    # 5. 股票池与数据说明
-    n_elig = elig.sum(1)
+    # 5. 为什么要自己拼主力：直接拼接 vs 同合约收益
+    splice = []
+    for sym in ret.columns:
+        a, b = w["ret"].loc[sl, sym].dropna(), w["naive_ret"].loc[sl, sym].dropna()
+        if len(a) < 250:
+            continue
+        m = w["main"].loc[sl, sym]
+        rolled = m.ne(m.shift()) & m.notna() & m.shift().notna()
+        splice.append({"symbol": sym, "name": UNIVERSE.get(sym, (sym,))[0],
+                       "proper": float(np.expm1(np.log1p(a).sum())), "naive": float(np.expm1(np.log1p(b).sum())),
+                       "max_jump": float(b[rolled.reindex(b.index, fill_value=False)].abs().max()),
+                       "rolls_per_year": float(rolled.sum() / len(a) * 252)})
+    tables["splice"] = pd.DataFrame(splice).assign(gap=lambda d: d.proper - d.naive)
+
+    # 6. 股票池与数据说明
+    n_elig = elig.sum(axis=1)
     tables["universe"] = pd.DataFrame({"month": n_elig.resample("ME").last().index.strftime("%Y-%m"),
                                        "n": n_elig.resample("ME").last().values})
     tables["meta"] = pd.DataFrame([{

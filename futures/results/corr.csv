@@ -1,0 +1,17 @@
+a,b,corr
+carry,carry,1
+xsmom,carry,0.557553
+tsmom,carry,0.313877
+combo,carry,0.761019
+carry,xsmom,0.557553
+xsmom,xsmom,1
+tsmom,xsmom,0.7178
+combo,xsmom,0.895902
+carry,tsmom,0.313877
+xsmom,tsmom,0.7178
+tsmom,tsmom,1
+combo,tsmom,0.634297
+carry,combo,0.761019
+xsmom,combo,0.895902
+tsmom,combo,0.634297
+combo,combo,1

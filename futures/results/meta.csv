@@ -1,0 +1,2 @@
+start,end,split,cost_bps,n_contracts,n_rows,n_symbols,n_bad_returns,universe_min,universe_median,universe_max
+2019-07-01,2026-10-12,2023-01-01,3,4840,954937,60,1,40,52,60
