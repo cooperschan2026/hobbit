@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import akshare as ak
+import pyarrow  # noqa: F401  提前确认能写 parquet，免得下载完才报错
 import pandas as pd
 
 DATA = Path(__file__).parent / "data"

@@ -1,6 +1,7 @@
-"""商品期货因子研究：主力连续收益 -> 因子 -> IC / 分组 / 多空回测 -> results/results.json。
+"""商品期货因子研究：主力连续收益 -> 因子 -> IC / 分组 / 多空回测 -> results/*.csv。
 
-约定：所有信号用第 t 日收盘及以前的数据计算，在 t 日收盘调仓，赚 t+1 日起的收益。
+约定：所有信号用第 t 日收盘及以前的数据计算，在 t+1 日收盘按信号调仓（留一天执行时间），
+赚 t+2 日起的收益。同一个收盘价既算信号又成交，会被收盘价噪声（买卖价差、尾盘冲量）带偏。
 """
 from pathlib import Path
 
@@ -20,6 +21,7 @@ MAX_ABS_RET = 0.25     # 单日涨跌幅超过 25% 视为数据错误
 MIN_VOLUME = 5000      # 主力合约 20 日均成交量（手）门槛
 MIN_HISTORY = 120      # 品种至少有 120 个交易日的主力收益才进入股票池
 MIN_N = 10             # 截面上至少 10 个品种才做多空
+LAG = 1                # 信号到成交的延迟（交易日）
 VOL_WIN = 60           # 波动率窗口，用于风险平价加权
 
 
@@ -142,7 +144,9 @@ def weights(sig, elig, vol, hold, mode, q=0.2, group=None, n_groups=5):
     return W
 
 
-def run(W, ret, cost=COST):
+def run(W, ret, cost=COST, lag=LAG):
+    if lag:
+        W = np.vstack([np.zeros((lag, W.shape[1])), W[:-lag]])  # t 日的信号在 t+lag 日收盘才成交
     R = np.nan_to_num(ret.values)
     gross = np.r_[0.0, (W[:-1] * R[1:]).sum(1)]
     turnover = np.abs(np.diff(W, axis=0, prepend=np.zeros((1, W.shape[1])))).sum(1)
@@ -165,7 +169,7 @@ def stats(r, turnover=None):
 
 
 def rank_ic(sig, ret, elig, horizon=5):
-    fwd = np.log1p(ret.fillna(0)).rolling(horizon).sum().shift(-horizon)
+    fwd = np.log1p(ret.fillna(0)).rolling(horizon).sum().shift(-horizon - LAG)  # 与回测一致：跳过执行日
     s = sig.where(elig)
     f = fwd.where(s.notna())
     ok = s.notna().sum(1) >= MIN_N
