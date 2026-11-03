@@ -106,6 +106,8 @@ const CONFIG = {
         { dmg: 15, count: 3, pierce: 2, cd: 0.85, speed: 460, range: 540, kb: 100 },
         { dmg: 20, count: 3, pierce: 3, cd: 0.8, speed: 480, range: 560, kb: 110 },
       ],
+      // 进化：铁锅暴雨（锅铲照扔，另外每秒砸 8 口锅）
+      evo: { dmg: 22, count: 3, pierce: 4, cd: 0.75, speed: 500, range: 580, kb: 120, pots: 8, potDmg: 45, potR: 62, fall: 0.5 },
     },
     knife: {
       levels: [
@@ -115,6 +117,8 @@ const CONFIG = {
         { dmg: 12, count: 4, radius: 82, spin: 4.0, hitCd: 0.38, kb: 150 },
         { dmg: 15, count: 5, radius: 96, spin: 4.3, hitCd: 0.36, kb: 160 },
       ],
+      // 进化：料理旋风（刀数翻倍、半径脉动、刀光拖尾）
+      evo: { dmg: 20, count: 10, radius: 108, pulse: 0.42, pulseSpeed: 2.2, spin: 4.6, hitCd: 0.3, kb: 180 },
     },
     chili: {
       levels: [
@@ -124,6 +128,8 @@ const CONFIG = {
         { dmg: 7, burn: 7, range: 175, angle: 70, cd: 2.2, dur: 1.1, tick: 0.15 },
         { dmg: 9, burn: 10, range: 205, angle: 75, cd: 2.0, dur: 1.3, tick: 0.15 },
       ],
+      // 进化：地狱火锅（火焰更猛，脚下留下燃烧 3 秒的红油）
+      evo: { dmg: 11, burn: 14, range: 240, angle: 85, cd: 1.1, dur: 1.4, tick: 0.12, trail: 3, trailR: 30, trailDmg: 12, trailTick: 0.35, trailGap: 22 },
     },
     pepper: {
       levels: [
@@ -133,6 +139,8 @@ const CONFIG = {
         { dmg: 26, radius: 110, cd: 2.6, count: 2, stun: 1.2, kb: 280 },
         { dmg: 32, radius: 125, cd: 2.2, count: 2, stun: 1.4, kb: 300 },
       ],
+      // 进化：黑胡椒风暴（先吸到中心再炸开）
+      evo: { dmg: 70, radius: 165, cd: 2.4, count: 2, stun: 1.6, kb: 380, pullR: 240, pullTime: 1.1, pullSpeed: 300, tickDmg: 6 },
     },
     pin: {
       levels: [
@@ -593,6 +601,14 @@ function drawFridgeIcon(c) {
   c.restore();
 }
 
+function drawPotArt(c) {
+  c.beginPath(); c.moveTo(13, -3); c.lineTo(25, -6); c.lineWidth = 6; c.strokeStyle = OL; c.stroke(); c.lineWidth = 3.4; c.strokeStyle = '#a8703c'; c.stroke();
+  c.beginPath(); c.moveTo(-16, -4); c.quadraticCurveTo(-15, 10, 0, 11); c.quadraticCurveTo(15, 10, 16, -4); c.closePath();
+  fs(c, lg(c, 0, -4, 0, 11, ['#5b5868', '#2a2733']), 2);
+  ell(c, 0, -4, 16, 3.6); fs(c, lg(c, -16, -4, 16, -4, ['#7d7a8c', '#3d3a48']), 2);
+  c.beginPath(); c.moveTo(-11, 1); c.quadraticCurveTo(-9, 7, -3, 8.5); c.lineWidth = 1.6; c.strokeStyle = 'rgba(255,255,255,0.35)'; c.stroke();
+}
+
 // ---- 被动道具图标 ----
 function star4(c, x, y, r, col) {
   c.beginPath(); c.moveTo(x, y - r);
@@ -824,6 +840,7 @@ function buildSprites() {
   SPR.smoke = glowSprite('rgba(52,44,58,0.85)', 48);
   SPR.smokeL = glowSprite('rgba(235,225,245,0.7)', 48);
   SPR.potatoB = makeSprite(18, 18, drawPotatoBullet);
+  SPR.pot = makeSprite(56, 30, drawPotArt, 24, 14);
   SPR.chest = makeSprite(38, 34, drawChest, 19, 18);
   SPR.bun = makeSprite(36, 30, drawBun, 18, 14);
   SPR.magnet = makeSprite(40, 36, drawMagnetIcon, 20, 18);
@@ -840,6 +857,8 @@ function buildSprites() {
 // =====================================================================
 const SRC = { spatula: 0, knife: 1, chili: 2, pepper: 3, pin: 4, frost: 5, pot: 6, fire: 7, vortex: 8, misc: 9 };
 const N_SRC = 10; // 每个伤害来源对同一敌人有独立的命中冷却
+// 地面区域（催泪雾、铁锅、红油、胡椒漩涡）的行为表
+const ZONE_UPDATE = {}, ZONE_END = {}, ZONE_DRAW = {};
 const WEAPONS = {};
 const WEAPON_ORDER = [];
 function defWeapon(def) { WEAPONS[def.id] = def; WEAPON_ORDER.push(def.id); }
@@ -852,6 +871,7 @@ defWeapon({
   init(w) { w.cd = 0.2; w.queue = 0; w.qt = 0; w.targets = []; w.ti = 0; },
   update(w, s, dt) {
     const p = state.player;
+    if (w.evo) potRain(w, s, dt);
     if (w.queue > 0) {
       w.qt -= dt;
       if (w.qt <= 0) { w.qt = 0.08; w.queue--; throwSpatula(w, s); }
@@ -864,6 +884,51 @@ defWeapon({
     }
   },
 });
+// 铁锅暴雨：随机砸向屏幕内的敌人
+function potRain(w, s, dt) {
+  w.potAcc = (w.potAcc || 0) + s.pots * dt;
+  while (w.potAcc >= 1) {
+    w.potAcc -= 1;
+    let x, y;
+    const list = state.enemies, e = list.length ? list[(Math.random() * list.length) | 0] : null;
+    if (e && !e.dead && Math.random() < 0.75 && onScreen(e.x, e.y, -20)) { x = e.x + rand(-12, 12); y = e.y + rand(-12, 12); }
+    else { x = cam.x + rand(-0.45, 0.45) * view.ww; y = cam.y + rand(-0.42, 0.42) * view.wh; }
+    const z = addZone('pot', x, y, s.potR, s.fall + 0.45);
+    z.w = w; z.a = 0; z.spin = rand(-3, 3);
+  }
+}
+ZONE_UPDATE.pot = (z) => {
+  if (z.a || z.t < wStats(z.w).fall) return;
+  z.a = 1;
+  const s = wStats(z.w), n = query(z.x, z.y, z.r);
+  for (let k = 0; k < n; k++) {
+    const e = QR[k], dx = e.x - z.x, dy = e.y - z.y, d = Math.hypot(dx, dy) || 1;
+    hurtEnemy(e, s.potDmg, z.w, dx / d, dy / d, 220);
+  }
+  chips(z.x, z.y, 6, ['#d9d2e6', '#9a93a8', '#5b5868'], 180, 3.5);
+  for (let i = 0; i < 6; i++) { const a = Math.random() * TAU, sp = rand(200, 380); addPart(P_SPARK, z.x, z.y, Math.cos(a) * sp, Math.sin(a) * sp, 0.22, 2, '#ffe9a8'); }
+  addRing(z.x, z.y, z.r, 0.3, 'rgba(255,240,200,0.8)', 4);
+  shake(0.05);
+  Sound.play('clang');
+};
+ZONE_DRAW.pot = (z, a) => {
+  const fall = wStats(z.w).fall, k = Math.min(1, z.t / fall);
+  if (!z.a) {
+    setWorld();
+    ctx.fillStyle = `rgba(8,6,18,${0.15 + k * 0.3})`;
+    ctx.beginPath(); ctx.ellipse(z.x, z.y + 6, 22 * (0.4 + k * 0.6), 8 * (0.4 + k * 0.6), 0, 0, TAU); ctx.fill();
+    ctx.strokeStyle = `rgba(255,90,70,${0.25 + k * 0.4})`; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.ellipse(z.x, z.y + 6, z.r * 0.8, z.r * 0.32, 0, 0, TAU); ctx.stroke();
+    const h = (1 - k) * (1 - k) * 420;
+    drawSpr(SPR.pot, z.x, z.y - h, 1.2, 1.2, z.spin * (1 - k));
+  } else {
+    const after = z.t - fall, sq = Math.max(0, 1 - after * 6) * 0.25;
+    ctx.globalAlpha = a;
+    drawSpr(SPR.pot, z.x, z.y + 2, 1.2 * (1 + sq), 1.2 * (1 - sq));
+    ctx.globalAlpha = 1;
+  }
+};
+
 function throwSpatula(w, s) {
   const p = state.player;
   let t = w.targets.length ? w.targets[w.ti++ % w.targets.length] : null;
@@ -899,10 +964,32 @@ defWeapon({
     }
   },
   draw(w) {
-    for (let i = 0; i < w.pos.length; i += 3) drawSpr(SPR.knife, w.pos[i], w.pos[i + 1], 1.05, 1.05, w.pos[i + 2] + Math.PI / 2);
+    if (w.evo) drawKnifeTrails(w);
+    const sc = w.evo ? 1.3 : 1.05;
+    for (let i = 0; i < w.pos.length; i += 3) drawSpr(SPR.knife, w.pos[i], w.pos[i + 1], sc, sc, w.pos[i + 2] + Math.PI / 2);
   },
 });
-function knifeRadius(w, s) { return s.radius; }
+function knifeRadius(w, s) {
+  w.lastR = w.evo ? s.radius * (1 + s.pulse * Math.sin(state.t * s.pulseSpeed)) : s.radius;
+  return w.lastR;
+}
+// 料理旋风的刀光拖尾
+function drawKnifeTrails(w) {
+  const p = state.player, R = w.lastR;
+  setWorld();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'round';
+  for (let i = 0; i < w.pos.length; i += 3) {
+    const a = w.pos[i + 2];
+    for (let k = 0; k < 4; k++) {
+      ctx.strokeStyle = `rgba(150,220,255,${0.07 + k * 0.07})`;
+      ctx.lineWidth = 11 - k * 2.4;
+      ctx.beginPath(); ctx.arc(p.x, p.y, R, a - 0.8 + k * 0.19, a); ctx.stroke();
+    }
+  }
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.lineCap = 'butt';
+}
 
 // ---- 辣椒喷火 ----
 defWeapon({
@@ -913,6 +1000,15 @@ defWeapon({
   update(w, s, dt) {
     const p = state.player;
     w.dir += angleDiff(w.dir, Math.atan2(p.facey, p.facex)) * Math.min(1, dt * 10);
+    if (w.evo) { // 地狱火锅：脚下留下燃烧的红油
+      w.trailT = (w.trailT || 0) - dt;
+      const dx = p.x - (w.lx ?? p.x + 999), dy = p.y - (w.ly ?? p.y);
+      if (dx * dx + dy * dy > s.trailGap * s.trailGap || w.trailT <= 0) {
+        const z = addZone('fire', p.x, p.y + 8, s.trailR, s.trail);
+        z.w = w; z.tick = 0;
+        w.lx = p.x; w.ly = p.y; w.trailT = 0.45;
+      }
+    }
     if (w.fireT > 0) {
       w.fireT -= dt; w.tick -= dt;
       const half = (s.angle * Math.PI) / 360;
@@ -1098,8 +1194,16 @@ defPassive({
   apply: (p, lv) => { p.armor += lv * PC.wrap.armor; },
 });
 
-// 进化表（第 6 步填充）
-const EVOLUTIONS = [];
+// =====================================================================
+// 进化表：武器满级 + 持有对应被动 → 下一次升级必出进化卡
+// =====================================================================
+const EVOLUTIONS = [
+  { weapon: 'knife', passive: 'whetstone', name: '料理旋风', desc: '刀数翻倍，转圈半径一伸一缩，刀光拖出残影。' },
+  { weapon: 'spatula', passive: 'clock', name: '铁锅暴雨', desc: '锅铲照扔，另外每秒向全屏随机砸下 8 口铁锅。' },
+  { weapon: 'chili', passive: 'apron', name: '地狱火锅', desc: '火焰更猛更宽，脚下留下一条燃烧 3 秒的红油。' },
+  { weapon: 'pepper', passive: 'magnet', name: '黑胡椒风暴', desc: '先把敌人卷到中心，再一口气炸开。' },
+];
+const wName = (w) => (w.evo ? EVOLUTIONS.find((ev) => ev.weapon === w.id).name : w.def.name);
 
 // =====================================================================
 // 子弹（对象池）
@@ -1134,7 +1238,96 @@ BULLET_UPDATE.shaker = (b, dt) => {
   b.rot += b.spin * dt;
   if (k >= 1) { b.dead = true; pepperLand(b.w, b.tx, b.ty); }
 };
-function pepperLand(w, x, y) { pepperBoom(x, y, wStats(w), w); }
+function pepperLand(w, x, y) {
+  if (!w.evo) { pepperBoom(x, y, wStats(w), w); return; }
+  const s = wStats(w), z = addZone('vortex', x, y, s.pullR, s.pullTime);
+  z.w = w; z.tick = 0;
+  Sound.play('vortex');
+}
+// 黑胡椒风暴：把敌人往中心吸
+ZONE_UPDATE.vortex = (z, dt) => {
+  const s = wStats(z.w), n = query(z.x, z.y, z.r);
+  z.tick -= dt;
+  const tick = z.tick <= 0;
+  if (tick) z.tick = 0.25;
+  for (let k = 0; k < n; k++) {
+    const e = QR[k];
+    if (e.boss) continue;
+    const dx = z.x - e.x, dy = z.y - e.y, d = Math.hypot(dx, dy) || 1;
+    const pull = Math.min(d * 0.9, s.pullSpeed * dt * (0.45 + 0.55 * (1 - d / z.r)) * (e.elite ? 0.5 : 1));
+    // 一边往里吸一边打转
+    e.x += (dx / d) * pull - (dy / d) * pull * 0.5; e.y += (dy / d) * pull + (dx / d) * pull * 0.5;
+    if (tick) hurtEnemy(e, s.tickDmg, z.w, 0, 0, 0, F_NOFLASH | F_NOCRIT);
+  }
+  z.pacc = (z.pacc || 0) + dt * 40;
+  while (z.pacc >= 1) {
+    z.pacc -= 1;
+    const a = Math.random() * TAU, r = z.r * rand(0.7, 1);
+    const q = addPart(P_SMOKE, z.x + Math.cos(a) * r, z.y + Math.sin(a) * r, -Math.cos(a) * 180 - Math.sin(a) * 160, -Math.sin(a) * 180 + Math.cos(a) * 160, 0.6, rand(0.4, 0.7), 0, SPR.smoke);
+    if (q) q.drag = 1;
+  }
+};
+ZONE_END.vortex = (z) => {
+  const s = wStats(z.w);
+  pepperBoom(z.x, z.y, s, z.w);
+  explosionFx(z.x, z.y, s.radius, 'pepper');
+  shake(0.25);
+};
+ZONE_DRAW.vortex = (z, a) => {
+  setWorld();
+  const k = z.t / z.life;
+  ctx.globalAlpha = a * 0.85;
+  ctx.lineCap = 'round';
+  for (let arm = 0; arm < 3; arm++) {
+    ctx.beginPath();
+    for (let s = 0; s <= 1.0001; s += 0.08) {
+      const r = z.r * (1 - s) * (1 - k * 0.3), ang = -z.t * 7 + (arm * TAU) / 3 + s * 4.2;
+      ctx.lineTo(z.x + Math.cos(ang) * r, z.y + Math.sin(ang) * r * 0.85);
+    }
+    ctx.strokeStyle = 'rgba(45,34,52,0.55)'; ctx.lineWidth = 7; ctx.stroke();
+    ctx.strokeStyle = 'rgba(210,200,190,0.25)'; ctx.lineWidth = 2; ctx.stroke();
+  }
+  ctx.lineCap = 'butt';
+  const s = (z.r / 24) * (0.3 + k * 0.4);
+  drawSpr(SPR.smoke, z.x, z.y, s, s * 0.85);
+  ctx.globalAlpha = 1;
+};
+
+// 地狱火锅：燃烧的红油
+ZONE_UPDATE.fire = (z, dt) => {
+  z.tick -= dt;
+  if (Math.random() < dt * 5) { const q = addPart(P_GLOW, z.x + rand(-z.r, z.r) * 0.6, z.y + rand(-z.r, z.r) * 0.4, 0, rand(-60, -30), 0.5, 0.3); if (q) { q.fire = 1; q.drag = 1; q.grow = 1; } }
+  if (z.tick > 0) return;
+  const s = wStats(z.w);
+  z.tick = s.trailTick;
+  const n = query(z.x, z.y, z.r);
+  for (let k = 0; k < n; k++) {
+    const e = QR[k];
+    if (e.hitCd[SRC.fire] > state.t) continue;
+    e.hitCd[SRC.fire] = state.t + s.trailTick * 0.9;
+    e.burnT = 2; e.burnW = z.w;
+    if (s.burn > e.burnDps) e.burnDps = s.burn;
+    hurtEnemy(e, s.trailDmg, z.w, 0, 0, 0, F_NOFLASH);
+  }
+};
+ZONE_DRAW.fire = (z, a) => {
+  setWorld();
+  const fl = 1 + Math.sin(z.t * 13 + z.x) * 0.06;
+  ctx.globalAlpha = a * 0.6;
+  ctx.fillStyle = '#b3160c';
+  ctx.beginPath(); ctx.ellipse(z.x, z.y, z.r * fl, z.r * 0.62 * fl, 0, 0, TAU); ctx.fill();
+  ctx.globalAlpha = a;
+  ctx.globalCompositeOperation = 'lighter';
+  drawSpr(SPR.glowO, z.x, z.y, (z.r / 24) * fl, (z.r / 24) * 0.6 * fl);
+  ctx.globalCompositeOperation = 'source-over';
+  setWorld();
+  ctx.strokeStyle = 'rgba(255,190,90,0.8)'; ctx.lineWidth = 1.4;
+  for (let i = 0; i < 2; i++) {
+    const ph = (z.t * 1.6 + i * 0.5 + z.x * 0.01) % 1;
+    ctx.beginPath(); ctx.arc(z.x + Math.cos(i * 2.4 + z.y) * z.r * 0.4, z.y + Math.sin(i * 2.4 + z.x) * z.r * 0.25, 1 + ph * 3.5, 0, TAU); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+};
 BULLET_UPDATE.pin = (b, dt) => {
   const p = state.player;
   b.rot += b.spin * dt;
@@ -1824,7 +2017,7 @@ function updateZones(dt) {
   for (let i = 0; i < zs.length; i++) {
     const z = zs[i];
     z.t += dt;
-    if (z.t >= z.life) { z.dead = true; continue; }
+    if (z.t >= z.life) { z.dead = true; if (ZONE_END[z.kind]) ZONE_END[z.kind](z); continue; }
     if (z.kind === 'gas') {
       const dx = p.x - z.x, dy = p.y - z.y;
       if (dx * dx + dy * dy < z.r * z.r * 0.8) p.gasT = 0.12;
@@ -1832,7 +2025,7 @@ function updateZones(dt) {
   }
   compact(zs, zonePool);
 }
-const ZONE_UPDATE = {};
+
 
 function updatePickups(dt) {
   const p = state.player, pr = CONFIG.player.pickup * p.pickupMul;
@@ -2049,8 +2242,6 @@ function drawZones() {
     } else if (ZONE_DRAW[z.kind]) ZONE_DRAW[z.kind](z, a);
   }
 }
-const ZONE_DRAW = {};
-
 function drawPickups() {
   for (const q of state.pickups) {
     if (!onScreen(q.x, q.y, 40)) continue;
@@ -2403,7 +2594,23 @@ function applyChoice(ch) {
     case 'gold': state.gold += CONFIG.levelUp.goldAmount; break;
   }
 }
-function evolveWeapon() {}
+function evolveWeapon(ev) {
+  const w = findWeapon(ev.weapon), p = state.player;
+  w.evo = true;
+  w.def.init(w);
+  state.slowmo = 0.5; state.slowmoScale = 0.25; // 慢动作 0.5 秒
+  shake(0.7);
+  game.flashAt = game.time;
+  showBanner(`进化！${ev.name}`, `${WEAPONS[ev.weapon].name} + ${PASSIVES[ev.passive].name}`, '#ffd23f', 3.2);
+  for (let i = 0; i < 40; i++) {
+    const a = (i / 40) * TAU, sp = rand(160, 360);
+    const q = addPart(P_GLOW, p.x, p.y - 6, Math.cos(a) * sp, Math.sin(a) * sp, rand(0.5, 0.9), rand(0.25, 0.45), 0, SPR.glowG);
+    if (q) q.drag = 2.5;
+  }
+  addRing(p.x, p.y, 260, 0.6, 'rgba(255,214,90,0.95)', 9);
+  state.evolutions = (state.evolutions || 0) + 1;
+  Sound.play('evolve');
+}
 
 function chooseCard(i) {
   const L = game.lv, ch = L.choices[i];
