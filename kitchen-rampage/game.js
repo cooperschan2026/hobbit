@@ -65,7 +65,38 @@ const CONFIG = {
   },
   enemies: {
     broccoli: { name: '西兰花', r: 15, hp: 18, speed: 48, dmg: 8, mass: 1.6, colors: ['#5fbf55', '#2f7d32', '#a5d67a'] },
+    chili: { name: '小辣椒', r: 10, hp: 7, speed: 100, dmg: 5, mass: 0.7, pack: [3, 6], colors: ['#ff4d4d', '#c8102e', '#6fcf5b'] },
+    egg: { name: '鸡蛋', r: 14, hp: 26, speed: 58, dmg: 8, mass: 1.3, split: 3, colors: ['#fffaf0', '#efe3cc', '#ffcf3f'] },
+    yolk: { name: '小蛋黄', r: 8, hp: 6, speed: 92, dmg: 4, mass: 0.6, gemChance: 0.5, colors: ['#ffcf3f', '#ff9f1c', '#fff3c0'] },
+    onion: { name: '洋葱', r: 15, hp: 32, speed: 55, dmg: 9, mass: 1.5, gasR: 60, gasLife: 4, gasSlow: 0.4, colors: ['#c39cf0', '#8e5cc9', '#efe2ff'] },
+    potato: {
+      name: '土豆炮手', r: 15, hp: 42, speed: 68, dmg: 8, mass: 2, gems: 2, keep: 270, shootCd: 2.6, windup: 0.45,
+      bullet: { speed: 185, dmg: 7, r: 7, life: 4 }, colors: ['#c69060', '#8d5f38', '#e8c39b'],
+    },
   },
+  elite: { scale: 1.5, hpMul: 10, dmgMul: 1.5, speedMul: 0.95, massMul: 4, redGems: 3 },
+  pickups: { bunChance: 0.006, bunHeal: 30, maxBuns: 3, magnetChance: 0.0012, chestHeal: 20 },
+  // 不同时间段各种敌人的出现权重（取不超过当前时间的最后一档）
+  spawnWeights: [
+    [0, { broccoli: 1 }],
+    [45, { broccoli: 0.75, chili: 0.25 }],
+    [120, { broccoli: 0.5, chili: 0.25, egg: 0.25 }],
+    [180, { broccoli: 0.35, chili: 0.25, egg: 0.2, onion: 0.2 }],
+    [240, { broccoli: 0.28, chili: 0.24, egg: 0.18, onion: 0.18, potato: 0.12 }],
+    [390, { broccoli: 0.32, chili: 0.3, egg: 0.16, onion: 0.14, potato: 0.08 }],
+  ],
+  // 时间线事件（秒）
+  events: [
+    { t: 60, type: 'chiliRush', count: 26, speed: 230, warn: 1.6 },
+    { t: 150, type: 'elite' },
+    { t: 180, type: 'banner', text: '食材大军增援！', sub: '敌人密度翻倍', color: '#ff9f43' },
+    { t: 240, type: 'elite' },
+    { t: 300, type: 'ring', count: 56 },
+    { t: 330, type: 'elite' },
+    { t: 390, type: 'horde', burst: 90 },
+    { t: 420, type: 'elite' },
+    { t: 450, type: 'clear' },
+  ],
   weapons: {
     spatula: {
       levels: [
@@ -672,6 +703,7 @@ const ICON_DRAW = {
   heal: (c) => { c.scale(1.3, 1.3); drawBun(c); },
   gold: (c) => { c.scale(1.3, 1.3); drawCoin(c); },
   heart: (c) => { c.scale(1.2, 1.2); drawHeartArt(c); },
+  chest: (c) => { c.translate(0, 2); c.scale(1.1, 1.1); drawChest(c); },
 };
 function buildIcons() {
   const res = Math.max(1, Math.ceil(view.ui * view.dpr * 1.7 * 2) / 2);
@@ -686,9 +718,76 @@ function drawIcon(id, x, y, size, alpha = 1) {
   ctx.globalAlpha = 1;
 }
 
+// ---- 敌人：小辣椒、鸡蛋、小蛋黄、洋葱、土豆炮手 ----
+function drawChiliEnemy(c) {
+  drawChiliBody(c);
+  eye(c, 1, -1.8, 2.7); eye(c, 7.5, -0.6, 2.4);
+  brow(c, -2, -5.5, 3.5, -4, 1.6); brow(c, 10, -4.2, 5.5, -3.4, 1.6);
+}
+function drawEgg(c) {
+  ell(c, 0, 1, 12.5, 15.5); fs(c, lg(c, -8, -14, 8, 16, ['#ffffff', '#f6eedd', '#dccfb5']));
+  c.beginPath(); c.moveTo(-6, -11); c.lineTo(-3, -8); c.lineTo(-1, -11); c.lineTo(2, -7.5); c.lineWidth = 1.2; c.strokeStyle = 'rgba(120,95,70,0.6)'; c.stroke();
+  shine(c, -5.5, -6, 2.6, 4.5, 0.85);
+  eye(c, -3, 2, 3.2); eye(c, 5, 2, 3.2);
+  brow(c, -6.5, -2.5, -0.5, -0.8); brow(c, 8.5, -2.5, 2.5, -0.8);
+  c.fillStyle = 'rgba(255,120,120,0.45)'; ell(c, -6.5, 7, 2.2, 1.3); c.fill(); ell(c, 8.5, 7, 2.2, 1.3); c.fill();
+  mouth(c, 1.5, 8, 2.2, true);
+}
+function drawYolk(c) {
+  c.beginPath();
+  for (let i = 0; i <= 10; i++) { const a = (i / 10) * TAU, r = 10.5 + Math.sin(i * 2.7) * 1.4; c.lineTo(Math.cos(a) * r, Math.sin(a) * r * 0.85 + 1.5); }
+  c.closePath(); fs(c, 'rgba(255,255,255,0.92)', 1.4);
+  circ(c, 0.5, 0, 7.5); fs(c, rg(c, -2, -3, 1, 8, ['#fff1a8', '#ffc928', '#ff9a1c']), 1.6);
+  shine(c, -2.5, -3, 1.6, 2.6, 0.85);
+  eye(c, -1.2, 0.5, 2.1); eye(c, 3.6, 0.5, 2.1);
+  brow(c, -3.6, -2.4, -0.2, -1.6, 1.4); brow(c, 6, -2.4, 2.6, -1.6, 1.4);
+}
+function drawOnion(c) {
+  c.beginPath(); c.moveTo(-2, -15); c.quadraticCurveTo(-6, -22, -3, -26); c.quadraticCurveTo(0, -20, 0, -15); fs(c, '#6fcf5b', 1.5);
+  c.beginPath(); c.moveTo(1, -15); c.quadraticCurveTo(6, -21, 4, -27); c.quadraticCurveTo(0, -21, -1, -15); fs(c, '#58b84a', 1.5);
+  c.beginPath(); c.moveTo(0, -16); c.bezierCurveTo(9, -14, 16, -4, 15, 4); c.bezierCurveTo(14, 12, 7, 16, 0, 16); c.bezierCurveTo(-7, 16, -14, 12, -15, 4); c.bezierCurveTo(-16, -4, -9, -14, 0, -16); c.closePath();
+  fs(c, lg(c, -12, -14, 12, 16, ['#e2c8ff', '#a875e0', '#7a45b5']));
+  c.strokeStyle = 'rgba(255,255,255,0.32)'; c.lineWidth = 1.2;
+  c.beginPath(); c.moveTo(-1, -14); c.quadraticCurveTo(-11, 0, -4, 15); c.moveTo(1, -14); c.quadraticCurveTo(11, 0, 4, 15); c.stroke();
+  c.strokeStyle = 'rgba(232,214,180,0.9)'; c.lineWidth = 1.2;
+  c.beginPath(); c.moveTo(-2, 16); c.lineTo(-4, 19.5); c.moveTo(0, 16.5); c.lineTo(0, 20); c.moveTo(2, 16); c.lineTo(4, 19.5); c.stroke();
+  eye(c, -3.5, 1, 3.3); eye(c, 5, 1, 3.3);
+  c.beginPath(); c.moveTo(-4.5, 5); c.quadraticCurveTo(-7, 9, -4.5, 10.5); c.quadraticCurveTo(-2, 9, -4.5, 5); c.fillStyle = '#7fd4ff'; c.fill();
+  c.beginPath(); c.moveTo(-2, 9); c.quadraticCurveTo(0.5, 7, 3, 9); c.quadraticCurveTo(5.5, 11, 7, 9); c.lineWidth = 1.5; c.strokeStyle = OL; c.stroke();
+}
+function drawPotato(c) {
+  rr(c, -14, -13, 28, 26, 10); fs(c, lg(c, -12, -12, 12, 14, ['#ddb07c', '#b07a48', '#8a5a32']));
+  c.fillStyle = 'rgba(90,55,25,0.45)';
+  for (const [x, y, r] of [[-9, -8, 1.6], [9, -9, 1.3], [-10, 8, 1.4], [10, 7, 1.7], [2, -11, 1.1]]) { circ(c, x, y, r); c.fill(); }
+  shine(c, -7, -7, 2.5, 4, 0.4);
+  eye(c, -3.5, -3, 3); eye(c, 5, -3, 3);
+  brow(c, -7, -7.5, -0.5, -6); brow(c, 8.5, -7.5, 2, -6);
+  ell(c, 1, 5.5, 4, 3.2); fs(c, '#3a2230', 1.6);
+  ell(c, 1, 5, 2.2, 1.4); c.fillStyle = '#1a0f16'; c.fill();
+}
+function drawPotatoBullet(c) {
+  circ(c, 0, 0, 6.5); fs(c, rg(c, -2, -2, 1, 7, ['#e8c39b', '#b07a48', '#8a5a32']), 1.6);
+  c.fillStyle = 'rgba(90,55,25,0.55)'; circ(c, 2, 1.5, 1.1); c.fill(); circ(c, -2, 2.5, 0.9); c.fill();
+}
+function drawChest(c) {
+  rr(c, -15, -2, 30, 16, 3); fs(c, lg(c, 0, -2, 0, 14, ['#c98545', '#8a5326']), 2);
+  c.beginPath(); c.moveTo(-15, -2); c.lineTo(-15, -7); c.quadraticCurveTo(0, -18, 15, -7); c.lineTo(15, -2); c.closePath();
+  fs(c, lg(c, 0, -14, 0, -2, ['#e09a55', '#a5642e']), 2);
+  c.fillStyle = '#ffd23f'; c.strokeStyle = OL; c.lineWidth = 1.4;
+  for (const x of [-11, 8]) { c.beginPath(); c.rect(x, -11.5, 3.2, 25.5); c.fill(); c.stroke(); }
+  rr(c, -4, -6, 8, 9, 1.6); fs(c, '#ffe680', 1.6);
+  c.fillStyle = OL; circ(c, 0, -2.5, 1.2); c.fill(); c.fillRect(-0.6, -2.5, 1.2, 3);
+  shine(c, -8, -10, 3, 1.4, 0.45);
+}
+
 // 敌人外观表：绘制函数 + 精灵尺寸 + 摇摆动画速度
 const ENEMY_ART = {
   broccoli: { draw: drawBroccoli, w: 46, h: 46, anim: 7 },
+  chili: { draw: drawChiliEnemy, w: 44, h: 22, anim: 16 },
+  egg: { draw: drawEgg, w: 34, h: 40, anim: 8 },
+  yolk: { draw: drawYolk, w: 28, h: 28, anim: 14 },
+  onion: { draw: drawOnion, w: 40, h: 56, ay: 30, anim: 7 },
+  potato: { draw: drawPotato, w: 38, h: 38, anim: 6 },
 };
 function buildEnemySprites(type, art) {
   const n = makeSprite(art.w, art.h, art.draw, art.ax ?? art.w / 2, art.ay ?? art.h / 2);
@@ -724,6 +823,11 @@ function buildSprites() {
   SPR.glowG = glowSprite('rgba(255,215,90,1)', 48);
   SPR.smoke = glowSprite('rgba(52,44,58,0.85)', 48);
   SPR.smokeL = glowSprite('rgba(235,225,245,0.7)', 48);
+  SPR.potatoB = makeSprite(18, 18, drawPotatoBullet);
+  SPR.chest = makeSprite(38, 34, drawChest, 19, 18);
+  SPR.bun = makeSprite(36, 30, drawBun, 18, 14);
+  SPR.magnet = makeSprite(40, 36, drawMagnetIcon, 20, 18);
+  SPR.heart = makeSprite(36, 34, drawHeartArt, 18, 17);
   // 屏幕暗角
   const vc = makeCanvas(256, 256), v = vc.getContext('2d');
   v.fillStyle = rg(v, 128, 128, 40, 182, ['rgba(8,6,16,0)', 'rgba(8,6,16,0.12)', 'rgba(8,6,16,0.6)']);
@@ -1078,9 +1182,38 @@ function spawnEnemy(type, x, y) {
   e.flash = 0; e.stun = 0; e.slowT = 0; e.slow = 0; e.burnT = 0; e.burnDps = 0; e.burnAcc = 0; e.burnW = null;
   e.hitCd.fill(0);
   e.elite = false; e.boss = false; e.dash = false; e.scale = 1; e.t = 0; e.phase = Math.random() * TAU;
-  e.face = x < state.player.x ? 1 : -1; e.rot = 0; e.mode = 0; e.modeT = 0; e.shootT = 0; e.dirx = 0; e.diry = 0;
+  e.face = x < state.player.x ? 1 : -1; e.rot = 0; e.mode = 0; e.modeT = 0; e.shootT = rand(1, 2.5); e.dirx = 0; e.diry = 0;
   state.enemies.push(e);
   return e;
+}
+function makeElite(e) {
+  const E = CONFIG.elite;
+  e.elite = true; e.scale = E.scale; e.r *= E.scale;
+  e.hp = e.maxHp = e.maxHp * E.hpMul; e.dmg *= E.dmgMul; e.speed *= E.speedMul; e.mass *= E.massMul;
+  return e;
+}
+
+// ---- 敌人子弹（对象池） ----
+const ebPool = new Pool(() => ({}));
+function spawnEBullet(kind, x, y, vx, vy, r, dmg, life) {
+  const b = ebPool.get();
+  b.dead = false; b.kind = kind; b.x = x; b.y = y; b.vx = vx; b.vy = vy; b.r = r; b.dmg = dmg; b.life = life; b.t = 0; b.rot = 0;
+  state.ebullets.push(b);
+  return b;
+}
+
+// ---- 地面区域：催泪雾等 ----
+const zonePool = new Pool(() => ({}));
+function addZone(kind, x, y, r, life) {
+  const z = zonePool.get();
+  z.dead = false; z.kind = kind; z.x = x; z.y = y; z.r = r; z.life = life; z.t = 0; z.tick = 0; z.w = null; z.a = 0;
+  state.zones.push(z);
+  return z;
+}
+
+// ---- 掉落物：宝箱、包子、磁铁 ----
+function spawnPickup(kind, x, y) {
+  state.pickups.push({ kind, x, y, t: 0, dead: false, attract: false, spd: 0, phase: Math.random() * TAU });
 }
 // =====================================================================
 // 游戏状态
@@ -1110,7 +1243,8 @@ function newState() {
     t: 0,
     player: makePlayer(),
     slowmo: 0, slowmoScale: 1,
-    enemies: [], bullets: [], gems: [], fx: [], parts: [],
+    enemies: [], bullets: [], gems: [], fx: [], parts: [], ebullets: [], zones: [], pickups: [],
+    banners: [], timers: [], evIdx: 0, warn: null, dark: 0, darkTarget: 0, siren: 0,
     kills: 0, eid: 0, spawnAcc: 0, noSpawn: false, dying: 0,
     level: 1, xp: 0, gold: 0, pendingLevels: 0, rerolls: CONFIG.levelUp.rerolls,
     pickCombo: 0, lastPick: -9, mergeT: 0,
@@ -1187,8 +1321,96 @@ function edgePointDir(ang, margin) {
   const t = Math.min(hw / (Math.abs(c) || 1e-6), hh / (Math.abs(s) || 1e-6));
   return [state.player.x + c * t, state.player.y + s * t];
 }
-function pickEnemyType() { return 'broccoli'; }
-function spawnOne() { const [x, y] = edgePoint(CONFIG.spawn.margin); spawnEnemy(pickEnemyType(), x, y); }
+function currentWeights() {
+  const W = CONFIG.spawnWeights;
+  let w = W[0][1];
+  for (const [t, ws] of W) if (state.t >= t) w = ws;
+  return w;
+}
+function pickEnemyType() {
+  const w = currentWeights();
+  let sum = 0;
+  for (const k in w) sum += w[k];
+  let r = Math.random() * sum;
+  for (const k in w) { r -= w[k]; if (r <= 0) return k; }
+  return 'broccoli';
+}
+function spawnOne() {
+  const type = pickEnemyType();
+  const [x, y] = edgePoint(CONFIG.spawn.margin);
+  if (type === 'chili') { // 小辣椒成群出现
+    const n = randInt(...CONFIG.enemies.chili.pack);
+    for (let i = 0; i < n; i++) spawnEnemy('chili', x + rand(-34, 34), y + rand(-34, 34));
+    state.spawnAcc -= n - 1;
+  } else spawnEnemy(type, x, y);
+}
+
+// ---- 时间线事件 ----
+function showBanner(text, sub, color = '#ffd166', dur = 3) {
+  state.banners.push({ text, sub, color, t: 0, dur });
+  Sound.play('warn');
+}
+function later(delay, fn) { state.timers.push({ at: state.t + delay, fn }); }
+function updateTimeline() {
+  const evs = CONFIG.events;
+  while (state.evIdx < evs.length && state.t >= evs[state.evIdx].t) runEvent(evs[state.evIdx++]);
+  const tm = state.timers;
+  for (let i = tm.length - 1; i >= 0; i--) if (state.t >= tm[i].at) { const f = tm[i].fn; tm.splice(i, 1); f(); }
+}
+function runEvent(ev) {
+  const p = state.player;
+  switch (ev.type) {
+    case 'banner': showBanner(ev.text, ev.sub, ev.color); break;
+    case 'chiliRush': {
+      const ang = Math.random() * TAU;
+      state.warn = { ang, until: state.t + ev.warn };
+      showBanner('辣椒冲锋！', '一排小辣椒正从箭头方向冲过来', '#ff5e57');
+      later(ev.warn, () => {
+        const c = Math.cos(ang), s = Math.sin(ang), dist = Math.max(view.ww, view.wh) / 2 + 60;
+        for (let i = 0; i < ev.count; i++) {
+          const row = i % 2, off = (Math.floor(i / 2) - ev.count / 4) * 30 + row * 15;
+          const x = state.player.x + c * (dist + row * 34) - s * off, y = state.player.y + s * (dist + row * 34) + c * off;
+          const e = spawnEnemy('chili', x, y);
+          e.dash = true; e.dirx = -c; e.diry = -s; e.speed = ev.speed;
+        }
+        Sound.play('rush');
+      });
+      break;
+    }
+    case 'elite': {
+      const w = currentWeights(), types = Object.keys(w).filter((k) => k !== 'chili');
+      const [x, y] = edgePoint(CONFIG.spawn.margin);
+      makeElite(spawnEnemy(pick(types.length ? types : ['broccoli']), x, y));
+      showBanner('精英出现！', '击败它必掉宝箱', '#ffd23f');
+      break;
+    }
+    case 'ring': {
+      const R = Math.max(view.ww, view.wh) * 0.56;
+      for (let i = 0; i < ev.count; i++) {
+        const a = (i / ev.count) * TAU;
+        spawnEnemy(i % 3 === 2 ? 'onion' : 'broccoli', p.x + Math.cos(a) * R, p.y + Math.sin(a) * R);
+      }
+      showBanner('包围圈！', '趁圈子还没收紧，撕开一个缺口', '#ff7eb6');
+      break;
+    }
+    case 'horde': {
+      for (let i = 0; i < ev.burst && state.enemies.length < 400; i++) spawnOne();
+      showBanner('大潮来袭！', '食材从四面八方涌来，撑住！', '#ff5e57');
+      break;
+    }
+    case 'clear': {
+      for (const e of state.enemies) if (!e.dead) { chips(e.x, e.y, 3, CONFIG.enemies[e.type].colors, 120, 4); killEnemy(e); }
+      for (const b of state.ebullets) b.dead = true;
+      state.noSpawn = true;
+      state.darkTarget = 0.62;
+      state.siren = 4;
+      showBanner('警告', '西瓜大王正在接近……', '#ff3b3b', 4.5);
+      shake(0.4);
+      Sound.play('siren');
+      break;
+    }
+  }
+}
 function updateSpawning(dt) {
   if (state.noSpawn) return;
   const c = curveAt(CONFIG.spawn.curve, state.t);
@@ -1249,6 +1471,26 @@ function killEnemy(e) {
   state.kills++;
   Sound.play('kill');
   dropGems(e);
+  const C = CONFIG.enemies[e.type];
+  if (e.type === 'egg') { // 碎成小蛋黄继续追
+    for (let k = 0; k < C.split; k++) {
+      const a = (k / C.split) * TAU + rand(-0.4, 0.4);
+      const y = spawnEnemy('yolk', e.x + Math.cos(a) * 6, e.y + Math.sin(a) * 6);
+      y.kx = Math.cos(a) * 230; y.ky = Math.sin(a) * 230;
+    }
+    chips(e.x, e.y, 6, ['#ffffff', '#f3e6cc'], 170, 4);
+  } else if (e.type === 'onion') {
+    addZone('gas', e.x, e.y, C.gasR * (e.elite ? 1.5 : 1), C.gasLife);
+  }
+  if (e.elite) {
+    spawnPickup('chest', e.x, e.y);
+    for (let k = 0; k < CONFIG.elite.redGems; k++) spawnGem(e.x + rand(-10, 10), e.y + rand(-10, 10), CONFIG.gems.values[2]);
+    shake(0.3);
+  } else if (!e.dash) {
+    const P = CONFIG.pickups;
+    if (Math.random() < P.bunChance && state.pickups.filter((q) => q.kind === 'bun').length < P.maxBuns) spawnPickup('bun', e.x, e.y);
+    else if (Math.random() < P.magnetChance) spawnPickup('magnet', e.x, e.y);
+  }
 }
 
 // ---- 经验晶 ----
@@ -1264,7 +1506,8 @@ function spawnGem(x, y, value) {
 const gemKind = (v) => (v >= 50 ? 3 : v >= 20 ? 2 : v >= 5 ? 1 : 0);
 function dropGems(e) {
   const D = CONFIG.drops, m = state.t / 60, V = CONFIG.gems.values;
-  const n = CONFIG.enemies[e.type].gems || 1;
+  const C = CONFIG.enemies[e.type], n = C.gems || 1;
+  if (C.gemChance && Math.random() > C.gemChance) return;
   for (let i = 0; i < n; i++) {
     const r = Math.random();
     const v = r < D.red + D.redPerMin * m ? V[2] : r < D.green + D.greenPerMin * m ? V[1] : V[0];
@@ -1396,7 +1639,12 @@ function updatePlayer(dt) {
     p.facex = ix; p.facey = iy;
     if (Math.abs(ix) > 0.2) p.flip = ix > 0 ? 1 : -1;
   }
-  const spd = CONFIG.player.speed * p.spdMul;
+  let spd = CONFIG.player.speed * p.spdMul;
+  if (p.gasT > 0) { // 催泪雾：减速 + 流眼泪
+    p.gasT -= dt;
+    spd *= 1 - CONFIG.enemies.onion.gasSlow;
+    if (Math.random() < dt * 10) { const q = addPart(P_CHIP, p.x + p.flip * 5 + rand(-3, 3), p.y - 12, rand(-30, 30), rand(10, 30), 0.5, 2.6, '#8fd8ff'); if (q) { q.vz = 60; q.z = 6; } }
+  }
   const tx = ix * spd, ty = iy * spd;
   const acc = (spd / CONFIG.player.accelTime) * dt;
   const dx = tx - p.vx, dy = ty - p.vy, dl = Math.hypot(dx, dy);
@@ -1506,11 +1754,19 @@ function updateEnemies(dt) {
     }
     let mvx = 0, mvy = 0;
     if (e.stun > 0) e.stun -= dt;
+    else if (e.dash) { mvx = e.dirx * spd; mvy = e.diry * spd; }
+    else if (e.type === 'potato') { potatoAI(e, dt, dx, dy, d, spd); mvx = e.vx; mvy = e.vy; }
     else { mvx = (dx / d) * spd; mvy = (dy / d) * spd; }
     e.vx = mvx; e.vy = mvy;
     e.x += (mvx + e.kx) * dt; e.y += (mvy + e.ky) * dt;
     e.kx *= kd; e.ky *= kd;
-    if (Math.abs(dx) > 3) e.face = dx > 0 ? 1 : -1;
+    if (e.type === 'chili') { // 小辣椒头朝着前进方向
+      if (mvx || mvy) {
+        let r = Math.atan2(mvy, mvx);
+        if (Math.cos(r) < 0) { e.face = -1; r -= Math.PI; } else e.face = 1;
+        e.rot += angleDiff(e.rot, r) * Math.min(1, dt * 12);
+      }
+    } else if (Math.abs(dx) > 3) e.face = dx > 0 ? 1 : -1;
     // 接触伤害 + 不让敌人叠进主角身体里
     const ex = e.x - p.x, ey = e.y - p.y, ed2 = ex * ex + ey * ey;
     const cr = e.r + p.r * 0.75;
@@ -1521,6 +1777,104 @@ function updateEnemies(dt) {
     }
   }
   separate();
+}
+
+// 土豆炮手：停在远处吐土豆
+function potatoAI(e, dt, dx, dy, d, spd) {
+  const C = CONFIG.enemies.potato;
+  if (e.mode === 1) { // 蓄力
+    e.vx = 0; e.vy = 0; e.modeT -= dt;
+    if (e.modeT <= 0) {
+      e.mode = 0; e.shootT = C.shootCd * rand(0.85, 1.15);
+      const B = C.bullet, p = state.player, lead = (d / B.speed) * 0.3;
+      const ang = Math.atan2(p.y + p.vy * lead - e.y, p.x + p.vx * lead - e.x);
+      spawnEBullet('potato', e.x, e.y + 4, Math.cos(ang) * B.speed, Math.sin(ang) * B.speed, B.r * (e.elite ? 1.4 : 1), B.dmg * (e.elite ? 1.5 : 1), B.life);
+      e.kx -= Math.cos(ang) * 60; e.ky -= Math.sin(ang) * 60;
+      Sound.play('spit');
+    }
+    return;
+  }
+  const ux = dx / d, uy = dy / d;
+  if (d > C.keep + 30) { e.vx = ux * spd; e.vy = uy * spd; }
+  else if (d < C.keep - 60) { e.vx = -ux * spd * 0.8; e.vy = -uy * spd * 0.8; }
+  else { const s = Math.sin(e.phase + e.t * 0.3) > 0 ? 1 : -1; e.vx = -uy * spd * 0.45 * s; e.vy = ux * spd * 0.45 * s; }
+  e.shootT -= dt;
+  if (e.shootT <= 0 && d < C.keep + 140 && onScreen(e.x, e.y, -10)) { e.mode = 1; e.modeT = C.windup; }
+}
+
+function updateEBullets(dt) {
+  const p = state.player, list = state.ebullets;
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i];
+    b.t += dt;
+    if (b.t > b.life) { b.dead = true; continue; }
+    b.x += b.vx * dt; b.y += b.vy * dt; b.rot += dt * 9;
+    const dx = b.x - p.x, dy = b.y - p.y, rs = b.r + p.r * 0.7;
+    if (dx * dx + dy * dy < rs * rs && p.hp > 0) {
+      b.dead = true;
+      hurtPlayer(b.dmg);
+      chips(b.x, b.y, 5, ['#c69060', '#8d5f38'], 120, 3.5);
+    }
+  }
+  compact(list, ebPool);
+}
+
+function updateZones(dt) {
+  const p = state.player, zs = state.zones;
+  for (let i = 0; i < zs.length; i++) {
+    const z = zs[i];
+    z.t += dt;
+    if (z.t >= z.life) { z.dead = true; continue; }
+    if (z.kind === 'gas') {
+      const dx = p.x - z.x, dy = p.y - z.y;
+      if (dx * dx + dy * dy < z.r * z.r * 0.8) p.gasT = 0.12;
+    } else ZONE_UPDATE[z.kind](z, dt);
+  }
+  compact(zs, zonePool);
+}
+const ZONE_UPDATE = {};
+
+function updatePickups(dt) {
+  const p = state.player, pr = CONFIG.player.pickup * p.pickupMul;
+  for (const q of state.pickups) {
+    if (q.dead) continue;
+    q.t += dt;
+    const dx = p.x - q.x, dy = p.y - q.y, d = Math.hypot(dx, dy) || 1;
+    if (!q.attract && d < pr) { q.attract = true; q.spd = -80; }
+    if (q.attract) {
+      q.spd += 1600 * dt;
+      const st = q.spd * dt;
+      if (d < p.r + 10 || st >= d) { collectPickup(q); continue; }
+      q.x += (dx / d) * st; q.y += (dy / d) * st;
+    }
+  }
+  state.pickups = state.pickups.filter((q) => !q.dead);
+}
+function collectPickup(q) {
+  q.dead = true;
+  const p = state.player, P = CONFIG.pickups;
+  if (q.kind === 'bun') {
+    p.hp = Math.min(p.maxHp, p.hp + P.bunHeal);
+    floatText(p.x, p.y - 40, `+${P.bunHeal}`, '#7dff9a', 18, 1);
+    Sound.play('heal');
+  } else if (q.kind === 'magnet') {
+    state.vacuum = true;
+    floatText(p.x, p.y - 40, '全吸过来！', '#ff8a8a', 16, 1);
+    Sound.play('magnet');
+  } else if (q.kind === 'chest') {
+    p.hp = Math.min(p.maxHp, p.hp + P.chestHeal);
+    Sound.play('chest');
+    game.flashAt = game.time;
+    addRing(q.x, q.y, 120, 0.5, 'rgba(255,214,102,0.9)', 6);
+    openLevelUp('chest');
+  }
+}
+
+function updateBanners(dt) {
+  const bs = state.banners;
+  if (bs.length) { bs[0].t += dt; if (bs[0].t >= bs[0].dur) bs.shift(); }
+  if (state.siren > 0) state.siren -= dt;
+  state.dark += (state.darkTarget - state.dark) * Math.min(1, dt * 1.2);
 }
 
 // 敌人之间柔性推开，避免叠成一坨
@@ -1556,10 +1910,15 @@ function update(dt) {
     state.t += dt;
     updatePlayer(dt);
     updateWeapons(dt);
+    updateTimeline();
     updateSpawning(dt);
   }
   updateBullets(dt);
   updateEnemies(dt);
+  updateEBullets(dt);
+  updateZones(dt);
+  if (state.dying <= 0) updatePickups(dt);
+  updateBanners(dt);
   if (state.dying <= 0) updateGems(dt);
   updateParts(dt);
   updateFx(dt);
@@ -1635,7 +1994,17 @@ function drawEnemies() {
     const e = list[i];
     if (!onScreen(e.x, e.y, m)) continue;
     const art = SPR.enemy[e.type];
-    const v = e.flash > 0 ? art.w : e.burnT > 0 ? art.b : e.slowT > 0 ? art.f : art.n;
+    if (e.elite) { // 精英光环
+      const pulse = 1 + Math.sin(state.t * 5 + e.phase) * 0.12;
+      ctx.globalCompositeOperation = 'lighter';
+      drawSpr(SPR.glowG, e.x, e.y, (e.r / 15) * pulse, (e.r / 15) * pulse * 0.9);
+      ctx.globalCompositeOperation = 'source-over';
+      setWorld();
+      ctx.strokeStyle = `rgba(255,214,90,${0.55 + Math.sin(state.t * 6) * 0.25})`; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.ellipse(e.x, e.y + e.r * 0.9, e.r * 1.25 * pulse, e.r * 0.5 * pulse, 0, 0, TAU); ctx.stroke();
+    }
+    const charging = e.mode === 1 && e.type === 'potato' && ((e.modeT * 16) | 0) % 2 === 0;
+    const v = e.flash > 0 ? art.w : e.burnT > 0 || charging ? art.b : e.slowT > 0 ? art.f : art.n;
     const ph = e.stun > 0 ? e.phase : e.t * ENEMY_ART[e.type].anim + e.phase;
     const sq = Math.sin(ph) * 0.07, sc = e.scale;
     drawSpr(v, e.x, e.y, sc * (1 + sq) * e.face, sc * (1 - sq), e.rot + Math.sin(ph * 0.5) * 0.07);
@@ -1654,6 +2023,56 @@ function drawEnemies() {
     }
   }
   ctx.fill();
+}
+
+function drawEBullets() {
+  for (const b of state.ebullets) {
+    if (!onScreen(b.x, b.y, 30)) continue;
+    drawShadow(b.x, b.y + 9, b.r * 0.8, b.r * 0.3, 0.22);
+    if (b.kind === 'potato') drawSpr(SPR.potatoB, b.x, b.y, b.r / 6.5, b.r / 6.5, b.rot);
+    else drawSpr(SPR.seed, b.x, b.y, 1, 1, Math.atan2(b.vy, b.vx));
+  }
+}
+
+function drawZones() {
+  for (const z of state.zones) {
+    if (!onScreen(z.x, z.y, z.r + 20)) continue;
+    const a = Math.min(1, z.t / 0.3, (z.life - z.t) / 0.8);
+    if (z.kind === 'gas') {
+      for (let i = 0; i < 6; i++) {
+        const ang = i * 1.05 + z.t * 0.4, rr2 = z.r * (0.25 + (i % 3) * 0.2);
+        const s = (z.r / 24) * (0.55 + (i % 2) * 0.2) * (1 + Math.sin(z.t * 2 + i) * 0.08);
+        ctx.globalAlpha = a * 0.5;
+        drawSpr(SPR.glowP, z.x + Math.cos(ang) * rr2, z.y + Math.sin(ang) * rr2 * 0.7, s, s * 0.8);
+      }
+      ctx.globalAlpha = 1;
+    } else if (ZONE_DRAW[z.kind]) ZONE_DRAW[z.kind](z, a);
+  }
+}
+const ZONE_DRAW = {};
+
+function drawPickups() {
+  for (const q of state.pickups) {
+    if (!onScreen(q.x, q.y, 40)) continue;
+    const bob = Math.sin(state.t * 3 + q.phase) * 3;
+    const spr = q.kind === 'chest' ? SPR.chest : q.kind === 'bun' ? SPR.bun : SPR.magnet;
+    ctx.globalCompositeOperation = 'lighter';
+    drawSpr(q.kind === 'chest' ? SPR.glowG : q.kind === 'bun' ? SPR.glowW : SPR.glowR, q.x, q.y, q.kind === 'chest' ? 1.6 : 0.9, q.kind === 'chest' ? 1.4 : 0.8);
+    ctx.globalCompositeOperation = 'source-over';
+    drawShadow(q.x, q.y + 13, 12, 4, 0.25);
+    const s = q.kind === 'chest' ? 1 : 0.75;
+    drawSpr(spr, q.x, q.y - 4 + bob, s, s, q.kind === 'chest' ? Math.sin(state.t * 4) * 0.05 : 0);
+  }
+}
+
+function drawEliteBars() {
+  setUI();
+  for (const e of state.enemies) {
+    if (!e.elite || !onScreen(e.x, e.y, 0)) continue;
+    const x = toSX(e.x), y = toSY(e.y - e.r * 1.6) , w = 44 * view.zoom, h = 5 * view.zoom;
+    rr(ctx, x - w / 2 - 1.5, y - 1.5, w + 3, h + 3, 3); ctx.fillStyle = 'rgba(20,14,26,0.85)'; ctx.fill();
+    rr(ctx, x - w / 2, y, w * clamp(e.hp / e.maxHp, 0, 1), h, 2); ctx.fillStyle = '#ffd23f'; ctx.fill();
+  }
 }
 
 function drawParts(additive) {
@@ -1722,15 +2141,28 @@ function drawPlayer() {
 
 function renderWorld() {
   drawFloor();
+  drawZones();
   if (state.player.hp > 0) drawWeapons(true);
   drawGems();
+  drawPickups();
   drawEnemies();
   drawParts(false);
   drawPlayer();
   if (state.player.hp > 0) drawWeapons(false);
   drawBullets();
+  drawEBullets();
   drawParts(true);
   drawFx();
+  drawEliteBars();
+  // 7:30 之后屏幕变暗，只留主角周围一圈光
+  if (state.dark > 0.01) {
+    setUI();
+    const px = toSX(state.player.x), py = toSY(state.player.y);
+    const g = ctx.createRadialGradient(px, py, 90 * view.zoom, px, py, Math.max(view.w, view.h) * 0.75);
+    g.addColorStop(0, 'rgba(6,3,14,0)');
+    g.addColorStop(1, `rgba(6,3,14,${state.dark})`);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, view.w, view.h);
+  }
   // 暗角
   setUI();
   ctx.drawImage(SPR.vignette, 0, 0, view.w, view.h);
@@ -1796,11 +2228,64 @@ function renderInventory() {
   }
 }
 
+// 屏幕边缘的方向箭头（宝箱、精英、Boss 在屏幕外时）
+function edgeArrow(wx, wy, color, iconId, label) {
+  const u = view.ui, m = 34 * u;
+  const x = toSX(wx), y = toSY(wy), cx = view.w / 2, cy = view.h / 2;
+  if (x > m * 0.4 && x < view.w - m * 0.4 && y > m * 0.4 && y < view.h - m * 0.4) return;
+  const ang = Math.atan2(y - cy, x - cx);
+  const hw = view.w / 2 - m, hh = view.h / 2 - m;
+  const t = Math.min(hw / (Math.abs(Math.cos(ang)) || 1e-6), hh / (Math.abs(Math.sin(ang)) || 1e-6));
+  const ax = cx + Math.cos(ang) * t, ay = cy + Math.sin(ang) * t;
+  const pulse = 1 + Math.sin(game.time * 6) * 0.1;
+  ctx.save();
+  ctx.translate(ax, ay);
+  ctx.beginPath(); ctx.arc(0, 0, 17 * u * pulse, 0, TAU);
+  ctx.fillStyle = 'rgba(20,14,30,0.8)'; ctx.fill(); ctx.lineWidth = 2.5 * u; ctx.strokeStyle = color; ctx.stroke();
+  ctx.rotate(ang);
+  ctx.beginPath(); ctx.moveTo(26 * u * pulse, 0); ctx.lineTo(17 * u, -7 * u); ctx.lineTo(17 * u, 7 * u); ctx.closePath();
+  ctx.fillStyle = color; ctx.fill();
+  ctx.restore();
+  if (iconId) drawIcon(iconId, ax, ay, 26 * u);
+  else if (label) text(label, ax, ay + 1, 13 * u, color);
+}
+
+function renderBanners() {
+  const b = state.banners[0], u = view.ui;
+  if (b) {
+    const k = b.t / b.dur, a = Math.min(1, b.t / 0.25, (b.dur - b.t) / 0.5);
+    const y = 150 * u - (1 - easeOutBack(Math.min(1, b.t / 0.4))) * 40 * u;
+    ctx.globalAlpha = a;
+    const w = 520 * u;
+    ctx.fillStyle = lg(ctx, view.w / 2 - w / 2, 0, view.w / 2 + w / 2, 0, ['rgba(20,12,28,0)', 'rgba(20,12,28,0.72)', 'rgba(20,12,28,0)']);
+    ctx.fillRect(view.w / 2 - w / 2, y - 34 * u, w, 82 * u);
+    textO(b.text, view.w / 2, y, 40 * u, b.color, OL, 8 * u);
+    if (b.sub) text(b.sub, view.w / 2, y + 34 * u, 16 * u, '#f3e9ff', 'center', 'normal');
+    ctx.globalAlpha = 1;
+    void k;
+  }
+  // 辣椒冲锋来袭方向
+  if (state.warn && state.t < state.warn.until && ((game.time * 6) | 0) % 2 === 0) {
+    const p = state.player;
+    edgeArrow(p.x + Math.cos(state.warn.ang) * 5000, p.y + Math.sin(state.warn.ang) * 5000, '#ff4d4d', null, '!!');
+  }
+  // 警报红光
+  if (state.siren > 0) {
+    const a = (0.5 + Math.sin(game.time * 9) * 0.5) * Math.min(1, state.siren) * 0.45;
+    const g = ctx.createRadialGradient(view.w / 2, view.h / 2, Math.min(view.w, view.h) * 0.3, view.w / 2, view.h / 2, Math.max(view.w, view.h) * 0.7);
+    g.addColorStop(0, 'rgba(255,0,0,0)'); g.addColorStop(1, `rgba(255,30,30,${a})`);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, view.w, view.h);
+  }
+}
+
 function renderHUD() {
   setUI();
   const u = view.ui;
   renderXpBar();
   renderInventory();
+  for (const q of state.pickups) if (q.kind === 'chest') edgeArrow(q.x, q.y, '#ffd23f', 'chest');
+  for (const e of state.enemies) if (e.elite) edgeArrow(e.x, e.y, '#ffb84d', null, '精');
+  renderBanners();
   textO(fmtTime(state.t), view.w - 22 * u, 48 * u, 30 * u, '#fff7ec', OL, 5 * u, 'right');
   textO(`击杀 ${state.kills}`, view.w - 22 * u, 78 * u, 17 * u, '#ffd9a8', OL, 4 * u, 'right');
   if (state.gold > 0) textO(`金币 ${state.gold}`, view.w - 22 * u, 100 * u, 15 * u, '#ffe27a', OL, 4 * u, 'right');
@@ -2123,6 +2608,7 @@ function renderDebug() {
   setUI();
   const lines = [`FPS ${game.fps.toFixed(0)}`, `更新 ${game.upMs.toFixed(2)}ms  绘制 ${game.drawMs.toFixed(2)}ms`];
   if (state) lines.push(`敌人 ${state.enemies.length}  子弹 ${state.bullets.length}  晶体 ${state.gems.length}`);
+  if (state) lines.push(`粒子 ${state.parts.length}  ${game.god ? '无敌中' : ''}  L升级 T快进 G无敌`);
   ctx.font = font(12, 'normal'); ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   const w = 230, h = lines.length * 16 + 10;
   ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(view.w / 2 - w / 2, view.h - h - 8, w, h);
@@ -2142,6 +2628,8 @@ function handleInput() {
     case 'play':
       if (pressed(...KEYS.pause)) game.phase = 'pause';
       if (game.debug && pressed('KeyL')) { state.xp = xpNeed(state.level); gainXp(0); }
+      if (game.debug && pressed('KeyT')) state.t += 30;
+      if (game.debug && pressed('KeyG')) game.god = !game.god;
       break;
     case 'pause':
       if (pressed(...KEYS.pause) || input.mouse.click) game.phase = 'play';
