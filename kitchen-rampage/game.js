@@ -42,6 +42,17 @@ const CONFIG = {
       [240, 6.2, 200], [300, 7.5, 240], [360, 9, 280], [390, 26, 400], [445, 26, 400], [450, 0, 0],
     ],
   },
+  xp: { base: 5, perLevel: 4 },        // 升级所需经验 = 5 + 等级 * 4
+  gems: {
+    values: [1, 5, 20],                // 蓝 / 绿 / 红
+    maxOnField: 300,                   // 超过就就近合并成大晶体
+    mergeCell: 170,
+    popSpeed: 150,                     // 被吸之前先往外弹一下
+    attractAccel: 2400,                // 飞向主角的加速度
+    comboWindow: 0.45,                 // 连续拾取音调升高的时间窗
+  },
+  drops: { green: 0.03, greenPerMin: 0.018, red: 0.0, redPerMin: 0.003 },
+  levelUp: { rerolls: 2, shockRadius: 230, shockForce: 620, healAmount: 30, goldAmount: 50, inputDelay: 0.28 },
   enemies: {
     broccoli: { name: '西兰花', r: 15, hp: 18, speed: 48, dmg: 8, mass: 1.6, colors: ['#5fbf55', '#2f7d32', '#a5d67a'] },
   },
@@ -166,6 +177,7 @@ function resize() {
   view.ww = w / view.zoom; view.wh = h / view.zoom;
   view.ui = clamp(Math.min(w / 1280, h / 760), 0.62, 1.6);
   buildSprites();
+  buildIcons();
 }
 
 function shake(amount) {
@@ -296,10 +308,10 @@ function blob(c, circles, fill, lw = 2) {
 function shine(c, x, y, rx, ry, a = 0.5) { ell(c, x, y, rx, ry, -0.6); c.fillStyle = `rgba(255,255,255,${a})`; c.fill(); }
 
 function makeCanvas(w, h) { const cv = document.createElement('canvas'); cv.width = Math.max(1, Math.ceil(w)); cv.height = Math.max(1, Math.ceil(h)); return cv; }
-function makeSprite(w, h, draw, ax = w / 2, ay = h / 2) {
-  const cv = makeCanvas(w * sprRes, h * sprRes);
+function makeSprite(w, h, draw, ax = w / 2, ay = h / 2, res = sprRes) {
+  const cv = makeCanvas(w * res, h * res);
   const c = cv.getContext('2d');
-  c.scale(sprRes, sprRes);
+  c.scale(res, res);
   c.translate(ax, ay);
   c.lineJoin = 'round'; c.lineCap = 'round';
   draw(c);
@@ -437,6 +449,64 @@ function drawSpatulaArt(c) {
   for (let k = 0; k < 3; k++) { rr(c, 6 + k * 3.2, -4.3, 1.5, 8.6, 0.75); c.fill(); }
 }
 
+// ---- 调料晶（经验） ----
+const GEM_COLORS = [
+  ['#c9f3ff', '#4fc3f7', '#1d78c2', 'rgba(79,195,247,0.6)'],
+  ['#dcffd0', '#6fdc5e', '#2d9a3a', 'rgba(111,220,94,0.6)'],
+  ['#ffd6d2', '#ff5e57', '#b8262b', 'rgba(255,94,87,0.6)'],
+  ['#fff7c9', '#ffd23f', '#d08400', 'rgba(255,210,63,0.7)'],
+];
+const GEM_SIZE = [6, 7.5, 9, 11.5];
+function drawGem(c, cols, s) {
+  const w = s * 0.72;
+  const outline = () => { c.beginPath(); c.moveTo(0, -s); c.lineTo(w, 0); c.lineTo(0, s); c.lineTo(-w, 0); c.closePath(); };
+  outline(); c.fillStyle = cols[1]; c.fill();
+  c.beginPath(); c.moveTo(0, -s); c.lineTo(-w, 0); c.lineTo(0, s * 0.18); c.closePath(); c.fillStyle = cols[0]; c.fill();
+  c.beginPath(); c.moveTo(w, 0); c.lineTo(0, s); c.lineTo(0, s * 0.18); c.closePath(); c.fillStyle = cols[2]; c.fill();
+  outline(); c.lineWidth = 1.5; c.strokeStyle = OL; c.stroke();
+  shine(c, -s * 0.24, -s * 0.38, s * 0.11, s * 0.26, 0.9);
+}
+
+// ---- 补给：包子、金币 ----
+function drawBun(c) {
+  ell(c, 0, 3, 15, 11.5); fs(c, lg(c, 0, -9, 0, 15, ['#ffffff', '#eadcc4']), 2.2);
+  c.strokeStyle = 'rgba(150,115,80,0.55)'; c.lineWidth = 1.3;
+  for (let k = -2; k <= 2; k++) { c.beginPath(); c.moveTo(k * 1.8, -5.5); c.quadraticCurveTo(k * 4.8, -1, k * 6.2, 5); c.stroke(); }
+  circ(c, 0, -6, 2.3); c.fillStyle = '#e6d6bb'; c.fill();
+  shine(c, -8, -2, 2.5, 4, 0.7);
+}
+function drawCoin(c) {
+  circ(c, 0, 0, 15); fs(c, lg(c, -10, -12, 10, 12, ['#fff3a8', '#ffc531', '#de8a0a']), 2.4);
+  circ(c, 0, 0, 10.5); c.lineWidth = 1.6; c.strokeStyle = 'rgba(150,80,0,0.55)'; c.stroke();
+  rr(c, -4, -4, 8, 8, 1.5); c.fillStyle = OL; c.fill();
+  shine(c, -6, -7, 2.5, 4, 0.7);
+}
+function drawHeartArt(c) {
+  c.beginPath(); c.moveTo(0, 13); c.bezierCurveTo(-24, -3, -11, -21, 0, -8); c.bezierCurveTo(11, -21, 24, -3, 0, 13);
+  fs(c, lg(c, 0, -18, 0, 13, ['#ff9db5', '#ff3f6c']), 2.4);
+  shine(c, -8, -7, 2.6, 4.5, 0.65);
+}
+
+// ---- 图标（HUD、升级卡片用，48x48） ----
+const ICON_DRAW = {
+  spatula: (c) => { c.rotate(-0.8); c.scale(1.4, 1.4); drawSpatulaArt(c); },
+  heal: (c) => { c.scale(1.3, 1.3); drawBun(c); },
+  gold: (c) => { c.scale(1.3, 1.3); drawCoin(c); },
+  heart: (c) => { c.scale(1.2, 1.2); drawHeartArt(c); },
+};
+function buildIcons() {
+  const res = Math.max(1, Math.ceil(view.ui * view.dpr * 1.7 * 2) / 2);
+  SPR.icon = {};
+  for (const id in ICON_DRAW) SPR.icon[id] = makeSprite(48, 48, ICON_DRAW[id], 24, 24, res);
+}
+function drawIcon(id, x, y, size, alpha = 1) {
+  const s = SPR.icon[id];
+  if (!s) return;
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(s.c, x - size / 2, y - size / 2, size, size);
+  ctx.globalAlpha = 1;
+}
+
 // 敌人外观表：绘制函数 + 精灵尺寸 + 摇摆动画速度
 const ENEMY_ART = {
   broccoli: { draw: drawBroccoli, w: 46, h: 46, anim: 7 },
@@ -460,6 +530,8 @@ function buildSprites() {
   SPR.enemy = {};
   for (const type in ENEMY_ART) buildEnemySprites(type, ENEMY_ART[type]);
   SPR.spatula = makeSprite(36, 18, drawSpatulaArt);
+  SPR.gem = GEM_COLORS.map((cols, i) => makeSprite(GEM_SIZE[i] * 2 + 6, GEM_SIZE[i] * 2 + 6, (c) => drawGem(c, cols, GEM_SIZE[i])));
+  SPR.gemGlow = GEM_COLORS.map((cols) => glowSprite(cols[3], 40));
   // 屏幕暗角
   const vc = makeCanvas(256, 256), v = vc.getContext('2d');
   v.fillStyle = rg(v, 128, 128, 40, 182, ['rgba(8,6,16,0)', 'rgba(8,6,16,0.12)', 'rgba(8,6,16,0.6)']);
@@ -507,6 +579,11 @@ function throwSpatula(w, s) {
   Sound.play('throw');
 }
 
+// 被动道具表（第 4 步填充）与进化表（第 6 步填充）
+const PASSIVES = {};
+const PASSIVE_ORDER = [];
+const EVOLUTIONS = [];
+
 // =====================================================================
 // 子弹（对象池）
 // =====================================================================
@@ -542,6 +619,7 @@ const BULLET_DRAW = {
 // 敌人（对象池）
 // =====================================================================
 const enemyPool = new Pool(() => ({ hitCd: new Float32Array(N_SRC) }));
+const gemPool = new Pool(() => ({}));
 function spawnEnemy(type, x, y) {
   const d = CONFIG.enemies[type];
   const e = enemyPool.get();
@@ -584,8 +662,10 @@ function newState() {
     t: 0,
     player: makePlayer(),
     slowmo: 0, slowmoScale: 1,
-    enemies: [], bullets: [],
+    enemies: [], bullets: [], gems: [], fx: [],
     kills: 0, eid: 0, spawnAcc: 0, noSpawn: false, dying: 0,
+    level: 1, xp: 0, gold: 0, pendingLevels: 0, rerolls: CONFIG.levelUp.rerolls,
+    pickCombo: 0, lastPick: -9, mergeT: 0,
   };
 }
 
@@ -602,6 +682,24 @@ function addWeapon(id) {
   w.def.init(w);
   state.player.weapons.push(w);
   return w;
+}
+
+function addPassive(id) {
+  state.player.passives.push({ id, def: PASSIVES[id], lv: 1 });
+  recalcStats();
+}
+const findWeapon = (id) => state.player.weapons.find((w) => w.id === id);
+const findPassive = (id) => state.player.passives.find((x) => x.id === id);
+const passiveLv = (id) => { const x = findPassive(id); return x ? x.lv : 0; };
+
+// 根据被动道具重新计算主角属性
+function recalcStats() {
+  const p = state.player;
+  const oldMax = p.maxHp;
+  p.might = 1; p.cdMul = 1; p.armor = 0; p.regen = 0; p.spdMul = 1; p.pickupMul = 1; p.maxHp = CONFIG.player.hp;
+  for (const ps of p.passives) ps.def.apply(p, ps.lv);
+  if (p.maxHp > oldMax) p.hp += p.maxHp - oldMax;
+  p.hp = Math.min(p.hp, p.maxHp);
 }
 
 function endRun(win) {
@@ -701,6 +799,86 @@ function killEnemy(e) {
   e.dead = true;
   state.kills++;
   Sound.play('kill');
+  dropGems(e);
+}
+
+// ---- 经验晶 ----
+function spawnGem(x, y, value) {
+  const g = gemPool.get();
+  g.dead = false; g.x = x; g.y = y; g.value = value; g.kind = gemKind(value);
+  const a = Math.random() * TAU, s = rand(30, 90);
+  g.vx = Math.cos(a) * s; g.vy = Math.sin(a) * s;
+  g.attract = false; g.spd = 0; g.phase = Math.random() * TAU;
+  state.gems.push(g);
+  return g;
+}
+const gemKind = (v) => (v >= 50 ? 3 : v >= 20 ? 2 : v >= 5 ? 1 : 0);
+function dropGems(e) {
+  const D = CONFIG.drops, m = state.t / 60, V = CONFIG.gems.values;
+  const n = CONFIG.enemies[e.type].gems || 1;
+  for (let i = 0; i < n; i++) {
+    const r = Math.random();
+    const v = r < D.red + D.redPerMin * m ? V[2] : r < D.green + D.greenPerMin * m ? V[1] : V[0];
+    spawnGem(e.x + rand(-4, 4), e.y + rand(-4, 4), v);
+  }
+}
+function xpNeed(level) { return CONFIG.xp.base + level * CONFIG.xp.perLevel; }
+function gainXp(v) {
+  state.xp += v;
+  while (state.xp >= xpNeed(state.level)) {
+    state.xp -= xpNeed(state.level);
+    state.level++;
+    state.pendingLevels++;
+  }
+}
+function collectGem(g) {
+  g.dead = true;
+  if (state.t - state.lastPick < CONFIG.gems.comboWindow) state.pickCombo++; else state.pickCombo = 0;
+  state.lastPick = state.t;
+  Sound.play('pick', state.pickCombo);
+  gainXp(g.value);
+}
+// 地上晶体太多时就近合并（同一格子里的合成一个大晶体）
+function mergeGems() {
+  const gems = state.gems, max = CONFIG.gems.maxOnField;
+  if (gems.length <= max) return;
+  const cell = CONFIG.gems.mergeCell, map = new Map();
+  for (const g of gems) {
+    if (g.attract || g.dead) continue;
+    const key = Math.floor(g.x / cell) * 100003 + Math.floor(g.y / cell);
+    const t = map.get(key);
+    if (!t) { map.set(key, g); continue; }
+    t.value += g.value; t.kind = gemKind(t.value); g.dead = true;
+  }
+  compact(gems, gemPool);
+  if (gems.length > max) { // 还是太多：最远的统统并进一个
+    const p = state.player;
+    gems.sort((a, b) => ((b.x - p.x) ** 2 + (b.y - p.y) ** 2) - ((a.x - p.x) ** 2 + (a.y - p.y) ** 2));
+    const t = gems[0];
+    for (let i = 1; i <= gems.length - max + 20 && i < gems.length; i++) { if (gems[i].attract) continue; t.value += gems[i].value; gems[i].dead = true; }
+    t.kind = gemKind(t.value);
+    compact(gems, gemPool);
+  }
+}
+
+// 升级瞬间：金光 + 震开周围敌人
+function levelUpBurst() {
+  const p = state.player, R = CONFIG.levelUp.shockRadius, F = CONFIG.levelUp.shockForce;
+  for (const e of state.enemies) {
+    if (e.dead || e.boss) continue;
+    const dx = e.x - p.x, dy = e.y - p.y, d = Math.hypot(dx, dy) || 1;
+    if (d > R) continue;
+    const k = (F * (1 - d / R * 0.6)) / e.mass;
+    e.kx += (dx / d) * k; e.ky += (dy / d) * k;
+  }
+  game.flashAt = game.time;
+  addRing(p.x, p.y, R, 0.45, 'rgba(255,214,102,0.9)', 7);
+  Sound.play('levelup');
+}
+
+// ---- 简单特效：冲击波圆环 ----
+function addRing(x, y, r, dur, color, lw = 4) {
+  state.fx.push({ kind: 'ring', x, y, r, t: 0, dur, color, lw });
 }
 
 function hurtPlayer(raw) {
@@ -759,6 +937,38 @@ function updateBullets(dt) {
     if (b.dead) continue;
     b.t += dt;
     BULLET_UPDATE[b.kind](b, dt);
+  }
+}
+
+function updateGems(dt) {
+  const p = state.player, gems = state.gems;
+  const pr = CONFIG.player.pickup * p.pickupMul, pr2 = pr * pr;
+  const fr = Math.exp(-dt * 5), acc = CONFIG.gems.attractAccel * dt;
+  for (let i = 0; i < gems.length; i++) {
+    const g = gems[i];
+    if (g.dead) continue;
+    const dx = p.x - g.x, dy = p.y - g.y, d2 = dx * dx + dy * dy;
+    if (!g.attract) {
+      if (d2 < pr2 || state.vacuum) { g.attract = true; g.spd = -CONFIG.gems.popSpeed; }
+      else { g.x += g.vx * dt; g.y += g.vy * dt; g.vx *= fr; g.vy *= fr; continue; }
+    }
+    g.spd += acc;
+    const d = Math.sqrt(d2) || 1, stepLen = g.spd * dt;
+    if (d < p.r + 6 || stepLen >= d) { collectGem(g); continue; }
+    g.x += (dx / d) * stepLen; g.y += (dy / d) * stepLen;
+  }
+  state.vacuum = false;
+  state.mergeT -= dt;
+  if (state.mergeT <= 0) { state.mergeT = 0.5; mergeGems(); }
+  if (state.pendingLevels > 0) { levelUpBurst(); openLevelUp('level'); }
+}
+
+function updateFx(dt) {
+  const fx = state.fx;
+  for (let i = fx.length - 1; i >= 0; i--) {
+    const f = fx[i];
+    f.t += dt;
+    if (f.t >= f.dur) fx.splice(i, 1);
   }
 }
 
@@ -838,9 +1048,12 @@ function update(dt) {
   }
   updateBullets(dt);
   updateEnemies(dt);
+  if (state.dying <= 0) updateGems(dt);
+  updateFx(dt);
   updateCamera(dt, p.x, p.y);
   compact(state.enemies, enemyPool);
   compact(state.bullets, bulletPool);
+  compact(state.gems, gemPool);
 }
 
 // =====================================================================
@@ -857,6 +1070,37 @@ function drawShadow(x, y, rx, ry, a = 0.28) {
   setWorld();
   ctx.fillStyle = `rgba(8,6,18,${a})`;
   ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, TAU); ctx.fill();
+}
+
+function drawGems() {
+  const gems = state.gems, t = state.t;
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < gems.length; i++) {
+    const g = gems[i];
+    if (!onScreen(g.x, g.y, 40)) continue;
+    const s = 0.55 + g.kind * 0.12 + (g.kind === 3 ? Math.min(0.6, g.value / 400) : 0);
+    drawSpr(SPR.gemGlow[g.kind], g.x, g.y, s * (1 + Math.sin(t * 5 + g.phase) * 0.12), s);
+  }
+  ctx.globalCompositeOperation = 'source-over';
+  for (let i = 0; i < gems.length; i++) {
+    const g = gems[i];
+    if (!onScreen(g.x, g.y, 40)) continue;
+    const big = g.kind === 3 ? 1 + Math.min(0.5, g.value / 500) : 1;
+    drawSpr(SPR.gem[g.kind], g.x, g.y + Math.sin(t * 3.2 + g.phase) * 1.6, big, big, Math.sin(t * 2 + g.phase) * 0.15);
+  }
+}
+
+function drawFx() {
+  setWorld();
+  for (const f of state.fx) {
+    if (f.kind === 'ring') {
+      const k = f.t / f.dur, e = easeOutCubic(k);
+      ctx.globalAlpha = 1 - k;
+      ctx.strokeStyle = f.color; ctx.lineWidth = f.lw * (1 - k * 0.7);
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.r * e, 0, TAU); ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
 }
 
 const byY = (a, b) => a.y - b.y;
@@ -912,12 +1156,22 @@ function drawPlayer() {
 
 function renderWorld() {
   drawFloor();
+  drawGems();
   drawEnemies();
   drawPlayer();
   drawBullets();
+  drawFx();
   // 暗角
   setUI();
   ctx.drawImage(SPR.vignette, 0, 0, view.w, view.h);
+  // 升级金光
+  const fk = game.flashAt != null ? 1 - (game.time - game.flashAt) / 0.7 : 0;
+  if (fk > 0) {
+    const g = ctx.createRadialGradient(view.w / 2, view.h / 2, 0, view.w / 2, view.h / 2, Math.max(view.w, view.h) * 0.7);
+    g.addColorStop(0, `rgba(255,230,140,${0.18 * fk})`);
+    g.addColorStop(1, `rgba(255,190,60,${0.55 * fk})`);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, view.w, view.h);
+  }
 }
 
 // =====================================================================
@@ -939,11 +1193,27 @@ function panel(x, y, w, h, r, fill = 'rgba(24,20,36,0.88)', stroke = 'rgba(255,2
 }
 function dim(a) { setUI(); ctx.fillStyle = `rgba(12,9,20,${a})`; ctx.fillRect(0, 0, view.w, view.h); }
 
+function renderXpBar() {
+  const u = view.ui, h = 14 * u, W = view.w;
+  ctx.fillStyle = 'rgba(14,10,22,0.78)'; ctx.fillRect(0, 0, W, h + 4 * u);
+  const f = clamp(state.xp / xpNeed(state.level), 0, 1);
+  if (f > 0) {
+    const g = ctx.createLinearGradient(0, 0, W, 0);
+    g.addColorStop(0, '#45c6ff'); g.addColorStop(1, '#8b6bff');
+    ctx.fillStyle = g; ctx.fillRect(2 * u, 2 * u, (W - 4 * u) * f, h);
+    ctx.fillStyle = 'rgba(255,255,255,0.28)'; ctx.fillRect(2 * u, 2 * u, (W - 4 * u) * f, h * 0.35);
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.lineWidth = 1; ctx.strokeRect(1.5 * u, 1.5 * u, W - 3 * u, h + 1 * u);
+  textO(`Lv ${state.level}`, W - 10 * u, 2 * u + h / 2 + 0.5, 13 * u, '#ffffff', OL, 3.5 * u, 'right');
+}
+
 function renderHUD() {
   setUI();
   const u = view.ui;
-  textO(fmtTime(state.t), view.w - 22 * u, 34 * u, 30 * u, '#fff7ec', OL, 5 * u, 'right');
-  textO(`击杀 ${state.kills}`, view.w - 22 * u, 66 * u, 17 * u, '#ffd9a8', OL, 4 * u, 'right');
+  renderXpBar();
+  textO(fmtTime(state.t), view.w - 22 * u, 48 * u, 30 * u, '#fff7ec', OL, 5 * u, 'right');
+  textO(`击杀 ${state.kills}`, view.w - 22 * u, 78 * u, 17 * u, '#ffd9a8', OL, 4 * u, 'right');
+  if (state.gold > 0) textO(`金币 ${state.gold}`, view.w - 22 * u, 100 * u, 15 * u, '#ffe27a', OL, 4 * u, 'right');
   // 头顶小血条
   const p = state.player;
   const bx = toSX(p.x), by = toSY(p.y - 46);
@@ -1002,6 +1272,252 @@ function renderPause() {
   text('按 P / Esc 继续', cx, cy + 34 * u, 18 * u, '#d9d0ea', 'center', 'normal');
 }
 
+// =====================================================================
+// 升级三选一
+// =====================================================================
+function buildChoices() {
+  const p = state.player, out = [];
+  for (const ev of EVOLUTIONS) if (out.length < 3 && canEvolve(ev)) out.push({ kind: 'evo', id: ev.weapon, ev });
+  const pool = [];
+  for (const id of WEAPON_ORDER) {
+    const w = findWeapon(id);
+    if (w) { if (!w.evo && w.lv < CONFIG.weapons[id].levels.length) pool.push({ kind: 'wup', id, wt: 1.25 }); }
+    else if (p.weapons.length < 6) pool.push({ kind: 'wnew', id, wt: p.weapons.length < 3 ? 1.35 : 0.9 });
+  }
+  for (const id of PASSIVE_ORDER) {
+    const ps = findPassive(id);
+    // 能和已有武器组成进化的被动，出现概率高一点
+    const pairs = EVOLUTIONS.some((ev) => ev.passive === id && p.weapons.some((w) => w.id === ev.weapon && !w.evo));
+    if (ps) { if (ps.lv < 5) pool.push({ kind: 'pup', id, wt: 0.9 * (pairs ? 1.3 : 1) }); }
+    else if (p.passives.length < 6) pool.push({ kind: 'pnew', id, wt: 0.8 * (pairs ? 1.7 : 1) });
+  }
+  while (out.length < 3 && pool.length) {
+    let sum = 0;
+    for (const c of pool) sum += c.wt;
+    let r = Math.random() * sum, i = 0;
+    for (; i < pool.length - 1; i++) { r -= pool[i].wt; if (r <= 0) break; }
+    out.push(pool.splice(i, 1)[0]);
+  }
+  // 全都满级了：给回血或金币
+  if (out.length < 3) out.push({ kind: 'heal' });
+  if (out.length < 3) out.push({ kind: 'gold' });
+  return out;
+}
+function canEvolve(ev) {
+  const w = findWeapon(ev.weapon);
+  return !!(w && !w.evo && w.lv >= CONFIG.weapons[ev.weapon].levels.length && findPassive(ev.passive));
+}
+
+function openLevelUp(kind) {
+  if (game.phase !== 'play') return;
+  const pending = kind === 'chest' ? 1 : state.pendingLevels;
+  if (kind !== 'chest') state.pendingLevels = 0;
+  game.phase = 'levelup';
+  game.lv = { kind, pending, choices: buildChoices(), t0: game.time, hover: -1, sel: 0, rects: [], lift: [0, 0, 0], reroll: null };
+}
+
+function applyChoice(ch) {
+  const p = state.player;
+  switch (ch.kind) {
+    case 'wnew': addWeapon(ch.id); break;
+    case 'wup': findWeapon(ch.id).lv++; break;
+    case 'pnew': addPassive(ch.id); break;
+    case 'pup': findPassive(ch.id).lv++; recalcStats(); break;
+    case 'evo': evolveWeapon(ch.ev); break;
+    case 'heal': p.hp = Math.min(p.maxHp, p.hp + CONFIG.levelUp.healAmount); break;
+    case 'gold': state.gold += CONFIG.levelUp.goldAmount; break;
+  }
+}
+function evolveWeapon() {}
+
+function chooseCard(i) {
+  const L = game.lv, ch = L.choices[i];
+  if (!ch) return;
+  applyChoice(ch);
+  Sound.play('select');
+  L.pending--;
+  if (L.pending > 0 && game.phase === 'levelup') {
+    L.choices = buildChoices(); L.t0 = game.time; L.sel = 0; L.lift = [0, 0, 0];
+  } else if (game.phase === 'levelup') game.phase = 'play';
+}
+function rerollCards() {
+  if (state.rerolls <= 0) return;
+  state.rerolls--;
+  const L = game.lv;
+  L.choices = buildChoices(); L.t0 = game.time - 0.1; L.lift = [0, 0, 0];
+  Sound.play('select');
+}
+
+function handleLevelUpInput() {
+  const L = game.lv, n = L.choices.length, m = input.mouse;
+  const inRect = (r) => r && m.x >= r[0] && m.x <= r[0] + r[2] && m.y >= r[1] && m.y <= r[1] + r[3];
+  const prevHover = L.hover;
+  L.hover = -1;
+  for (let i = 0; i < n; i++) if (inRect(L.rects[i])) L.hover = i;
+  if (L.hover >= 0 && L.hover !== prevHover) L.sel = L.hover;
+  if (game.time - L.t0 < CONFIG.levelUp.inputDelay) return; // 防止连按误选
+  let pickI = -1;
+  if (pressed('Digit1', 'Numpad1')) pickI = 0;
+  if (pressed('Digit2', 'Numpad2')) pickI = 1;
+  if (pressed('Digit3', 'Numpad3')) pickI = 2;
+  if (pressed('ArrowLeft', 'KeyA')) L.sel = (L.sel + n - 1) % n;
+  if (pressed('ArrowRight', 'KeyD')) L.sel = (L.sel + 1) % n;
+  if (pressed('Space', 'Enter', 'NumpadEnter')) pickI = L.sel;
+  if (m.click) { if (L.hover >= 0) pickI = L.hover; else if (inRect(L.reroll)) rerollCards(); }
+  if (pressed('KeyR')) rerollCards();
+  if (pickI >= 0 && pickI < n) chooseCard(pickI);
+}
+
+function fmtNum(v) { return Number.isInteger(v) ? String(v) : String(+v.toFixed(2)); }
+function fmtStat(def, key, v) {
+  const L = def.labels[key];
+  const unit = Array.isArray(L) ? L[1] || '' : '', scale = Array.isArray(L) ? L[2] || 1 : 1;
+  return fmtNum(v * scale) + unit;
+}
+const labelOf = (def, key) => (Array.isArray(def.labels[key]) ? def.labels[key][0] : def.labels[key]);
+function cardInfo(ch) {
+  switch (ch.kind) {
+    case 'wnew': {
+      const d = WEAPONS[ch.id], s = CONFIG.weapons[ch.id].levels[0];
+      const stats = Object.keys(d.labels).slice(0, 3).map((k) => `${labelOf(d, k)} ${fmtStat(d, k, s[k])}`).join(' · ');
+      return { tag: '新武器', color: '#ff9f43', name: d.name, icon: ch.id, lv: 0, lines: [d.desc, stats] };
+    }
+    case 'wup': {
+      const w = findWeapon(ch.id), d = w.def, lv = CONFIG.weapons[ch.id].levels, a = lv[w.lv - 1], b = lv[w.lv];
+      const lines = [];
+      for (const k in d.labels) if (a[k] !== b[k]) lines.push(`${labelOf(d, k)}  ${fmtStat(d, k, a[k])} → ${fmtStat(d, k, b[k])}`);
+      return { tag: '武器升级', color: '#ffc94d', name: d.name, icon: ch.id, lv: w.lv, lines };
+    }
+    case 'pnew': {
+      const d = PASSIVES[ch.id];
+      return { tag: '新道具', color: '#4fd1c5', name: d.name, icon: ch.id, lv: 0, lines: [d.desc, `${d.label} ${d.total(1)}`] };
+    }
+    case 'pup': {
+      const ps = findPassive(ch.id), d = ps.def;
+      return { tag: '道具升级', color: '#63e6be', name: d.name, icon: ch.id, lv: ps.lv, lines: [d.desc, `${d.label}  ${d.total(ps.lv)} → ${d.total(ps.lv + 1)}`] };
+    }
+    case 'evo': {
+      const ev = ch.ev;
+      return { tag: '进化！', color: '#ffd23f', name: ev.name, icon: ev.weapon, lv: -1, evo: true,
+        lines: [`${WEAPONS[ev.weapon].name} + ${PASSIVES[ev.passive].name}`, ev.desc] };
+    }
+    case 'heal': return { tag: '补给', color: '#ff7eb6', name: '热腾腾的包子', icon: 'heal', lv: -1, lines: [`立即恢复 ${CONFIG.levelUp.healAmount} 点生命`] };
+    default: return { tag: '补给', color: '#ffd23f', name: '一袋金币', icon: 'gold', lv: -1, lines: [`金币 +${CONFIG.levelUp.goldAmount}`] };
+  }
+}
+
+const NO_BREAK = '，。、；：！？）》」…—·';
+function wrapText(str, maxW, size, weight = 'normal') {
+  ctx.font = font(size, weight);
+  const out = [];
+  let line = '';
+  for (const ch of str) {
+    const test = line + ch;
+    if (line && ctx.measureText(test).width > maxW && !NO_BREAK.includes(ch)) { out.push(line); line = ch; }
+    else line = test;
+  }
+  if (line) out.push(line);
+  return out;
+}
+
+function drawCard(info, x, y, w, h, idx, hot, appear) {
+  const u = view.ui, t = game.time;
+  ctx.save();
+  ctx.globalAlpha = appear;
+  // 外发光
+  if (hot || info.evo) {
+    ctx.shadowColor = info.evo ? 'rgba(255,210,63,0.9)' : info.color;
+    ctx.shadowBlur = (info.evo ? 26 + Math.sin(t * 5) * 10 : 18) * u;
+  }
+  rr(ctx, x, y, w, h, 16 * u);
+  ctx.fillStyle = lg(ctx, x, y, x, y + h, hot ? ['#3d3254', '#251f33'] : ['#322a45', '#1e1929']);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  // 边框（进化卡为流动的金边）
+  ctx.lineWidth = (hot ? 3.5 : 2.5) * u;
+  if (info.evo) {
+    const g = ctx.createLinearGradient(x, y, x + w, y + h);
+    const o = (t * 0.6) % 1;
+    g.addColorStop(0, '#b8860b'); g.addColorStop(o, '#fff6bf'); g.addColorStop(Math.min(1, o + 0.15), '#ffd23f'); g.addColorStop(1, '#b8860b');
+    ctx.strokeStyle = g;
+  } else ctx.strokeStyle = hot ? info.color : 'rgba(255,255,255,0.16)';
+  ctx.stroke();
+  // 顶部标签
+  ctx.font = font(13 * u);
+  const tw = ctx.measureText(info.tag).width + 20 * u;
+  rr(ctx, x + 14 * u, y + 14 * u, tw, 24 * u, 12 * u); ctx.fillStyle = info.color; ctx.fill();
+  text(info.tag, x + 14 * u + tw / 2, y + 26.5 * u, 13 * u, '#231a2c');
+  // 数字键提示
+  rr(ctx, x + w - 38 * u, y + 14 * u, 24 * u, 24 * u, 7 * u);
+  ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fill();
+  text(String(idx + 1), x + w - 26 * u, y + 26.5 * u, 14 * u, 'rgba(255,255,255,0.75)');
+  // 图标
+  const icx = x + w / 2, icy = y + 92 * u;
+  ctx.fillStyle = rg(ctx, icx, icy, 4 * u, 46 * u, [info.evo ? 'rgba(255,214,90,0.55)' : 'rgba(255,255,255,0.16)', 'rgba(255,255,255,0)']);
+  ctx.beginPath(); ctx.arc(icx, icy, 46 * u, 0, TAU); ctx.fill();
+  drawIcon(info.icon, icx, icy + Math.sin(t * 2.5 + idx) * 2 * u, 70 * u, appear);
+  // 名称
+  textO(info.name, icx, y + 156 * u, 23 * u, info.evo ? '#ffe680' : '#ffffff', OL, 4 * u);
+  // 等级宝石
+  let ly = y + 186 * u;
+  if (info.lv >= 0) {
+    for (let k = 0; k < 5; k++) {
+      const px = icx + (k - 2) * 19 * u, s = 6 * u;
+      ctx.beginPath(); ctx.moveTo(px, ly - s); ctx.lineTo(px + s, ly); ctx.lineTo(px, ly + s); ctx.lineTo(px - s, ly); ctx.closePath();
+      if (k < info.lv) ctx.fillStyle = '#ffd23f';
+      else if (k === info.lv) ctx.fillStyle = `rgba(255,236,150,${0.45 + Math.sin(t * 6) * 0.35})`;
+      else ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      ctx.fill();
+    }
+    text(info.lv === 0 ? '新获得' : `Lv ${info.lv} → Lv ${info.lv + 1}`, icx, ly + 20 * u, 13 * u, '#cbbfe0', 'center', 'normal');
+    ly += 46 * u;
+  } else ly += 6 * u;
+  // 描述
+  ctx.globalAlpha = appear;
+  for (const line of info.lines) {
+    for (const seg of wrapText(line, w - 36 * u, 15 * u)) {
+      text(seg, icx, ly, 15 * u, line.includes('→') ? '#9ff0c0' : '#ece4f7', 'center', 'normal');
+      ly += 21 * u;
+    }
+    ly += 4 * u;
+  }
+  ctx.restore();
+}
+
+function renderLevelUp() {
+  const L = game.lv, u = view.ui, t = game.time - L.t0, cx = view.w / 2, cy = view.h / 2;
+  dim(0.58 * clamp(t / 0.15, 0, 1));
+  const ta = easeOutBack(clamp(t / 0.35, 0, 1));
+  const title = L.kind === 'chest' ? '宝箱奖励！' : `升级！ Lv ${state.level}`;
+  ctx.save();
+  ctx.translate(cx, cy - 215 * u);
+  ctx.scale(ta, ta);
+  ctx.font = font(44 * u, '900'); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round'; ctx.lineWidth = 10 * u; ctx.strokeStyle = OL; ctx.strokeText(title, 0, 0);
+  ctx.fillStyle = lg(ctx, 0, -22 * u, 0, 22 * u, ['#fff1a8', '#ffb340']); ctx.fillText(title, 0, 0);
+  ctx.restore();
+  text(L.pending > 1 ? `选择一项强化（还有 ${L.pending - 1} 次）` : '选择一项强化', cx, cy - 172 * u, 16 * u, '#d9cdee', 'center', 'normal');
+  const n = L.choices.length, cw = 232 * u, ch = 318 * u, gap = 24 * u;
+  const x0 = cx - (n * cw + (n - 1) * gap) / 2, y0 = cy - ch / 2 + 6 * u;
+  const hot = L.hover >= 0 ? L.hover : L.sel;
+  for (let i = 0; i < n; i++) {
+    const a = clamp((t - i * 0.06) / 0.32, 0, 1);
+    L.lift[i] = lerp(L.lift[i] || 0, i === hot ? 1 : 0, 0.25);
+    const x = x0 + i * (cw + gap), y = y0 + (1 - easeOutBack(a)) * 90 * u - L.lift[i] * 10 * u;
+    L.rects[i] = [x, y, cw, ch];
+    drawCard(cardInfo(L.choices[i]), x, y, cw, ch, i, i === hot, a);
+  }
+  // 重抽按钮
+  const bw = 200 * u, bh = 40 * u, bx = cx - bw / 2, by = y0 + ch + 26 * u;
+  const can = state.rerolls > 0;
+  L.reroll = [bx, by, bw, bh];
+  rr(ctx, bx, by, bw, bh, 20 * u);
+  ctx.fillStyle = can ? 'rgba(126,99,255,0.85)' : 'rgba(90,80,110,0.5)'; ctx.fill();
+  ctx.lineWidth = 2 * u; ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.stroke();
+  text(`重抽（R） 剩余 ${state.rerolls} 次`, cx, by + bh / 2 + 1, 16 * u, can ? '#ffffff' : 'rgba(255,255,255,0.45)');
+  text('按 1 / 2 / 3、方向键 + 空格，或直接点击卡片', cx, by + bh + 26 * u, 14 * u, 'rgba(230,220,245,0.6)', 'center', 'normal');
+}
+
 function renderOver() {
   const k = clamp((game.time - game.endAt) / 0.5, 0, 1);
   dim(0.7 * k);
@@ -1016,7 +1532,7 @@ function renderOver() {
 function renderDebug() {
   setUI();
   const lines = [`FPS ${game.fps.toFixed(0)}`, `更新 ${game.upMs.toFixed(2)}ms  绘制 ${game.drawMs.toFixed(2)}ms`];
-  if (state) lines.push(`敌人 ${state.enemies.length}  子弹 ${state.bullets.length}`);
+  if (state) lines.push(`敌人 ${state.enemies.length}  子弹 ${state.bullets.length}  晶体 ${state.gems.length}`);
   ctx.font = font(12, 'normal'); ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   const w = 230, h = lines.length * 16 + 10;
   ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(view.w / 2 - w / 2, view.h - h - 8, w, h);
@@ -1035,9 +1551,13 @@ function handleInput() {
       break;
     case 'play':
       if (pressed(...KEYS.pause)) game.phase = 'pause';
+      if (game.debug && pressed('KeyL')) { state.xp = xpNeed(state.level); gainXp(0); }
       break;
     case 'pause':
       if (pressed(...KEYS.pause) || input.mouse.click) game.phase = 'play';
+      break;
+    case 'levelup':
+      handleLevelUpInput();
       break;
     case 'over':
     case 'win':
@@ -1062,6 +1582,7 @@ function render() {
   renderHUD();
   if (game.phase === 'pause') renderPause();
   else if (game.phase === 'over') renderOver();
+  else if (game.phase === 'levelup') renderLevelUp();
 }
 
 let lastNow = performance.now();
