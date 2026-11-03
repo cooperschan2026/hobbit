@@ -29,7 +29,7 @@ const CONFIG = {
     invuln: 0.5,           // 受击无敌时间
     lowHp: 0.3,            // 低于 30% 血量进入危险状态
   },
-  combat: { critChance: 0.1, critMul: 2, hitFlash: 0.07 },
+  combat: { critChance: 0.1, critMul: 2, hitFlash: 0.07, flashGap: 0.1 },
   difficulty: { hpPerMin: 0.15 },   // 敌人血量每分钟 +15%
   grid: { cell: 64 },
   spawn: {
@@ -73,6 +73,7 @@ const CONFIG = {
       name: '土豆炮手', r: 15, hp: 42, speed: 68, dmg: 8, mass: 2, gems: 2, keep: 270, shootCd: 2.6, windup: 0.45,
       bullet: { speed: 185, dmg: 7, r: 7, life: 4 }, colors: ['#c69060', '#8d5f38', '#e8c39b'],
     },
+    boss: { name: '西瓜大王', r: 62, hp: 5000, speed: 52, dmg: 18, mass: 60, colors: ['#4caf50', '#2e7d32', '#e8344a', '#2b1d2e', '#9be07a'] },
   },
   elite: { scale: 1.5, hpMul: 10, dmgMul: 1.5, speedMul: 0.95, massMul: 4, redGems: 3 },
   pickups: { bunChance: 0.006, bunHeal: 30, maxBuns: 3, magnetChance: 0.0012, chestHeal: 20 },
@@ -96,7 +97,20 @@ const CONFIG = {
     { t: 390, type: 'horde', burst: 90 },
     { t: 420, type: 'elite' },
     { t: 450, type: 'clear' },
+    { t: 480, type: 'boss' },
   ],
+  // Boss【西瓜大王】
+  boss: {
+    speed: 52, rollDmg: 24,
+    chaseTime: [3.0, 4.2],           // 追击多久后发动滚动冲撞
+    windup: 0.9,                     // 冲撞前蓄力（地上会出现红色预警）
+    rollSpeed: 440, rollTime: 1.25, recover: 0.7,
+    seeds: 10, seedSpeed: 150, seedDmg: 6,
+    split: 0.5,                      // 血量过半裂成两个小西瓜
+    halfScale: 0.68, halfSpeedMul: 1.25, halfSeeds: 7,
+    adds: { rate: 1.6, max: 45 },    // 打 Boss 时继续刷少量小怪（给经验）
+    redGems: 10,
+  },
   weapons: {
     spatula: {
       levels: [
@@ -796,6 +810,39 @@ function drawChest(c) {
   shine(c, -8, -10, 3, 1.4, 0.45);
 }
 
+// ---- Boss：西瓜大王 ----
+function drawWatermelon(c) {
+  const R = 62;
+  circ(c, 0, 0, R); fs(c, rg(c, -22, -26, 8, R, ['#a8e88a', '#56b85a', '#2e7d32']), 3);
+  c.save(); circ(c, 0, 0, R - 1.5); c.clip();
+  c.strokeStyle = 'rgba(22,80,32,0.9)'; c.lineWidth = 7;
+  for (let k = -3; k <= 3; k++) {
+    c.beginPath();
+    for (let y = -R; y <= R; y += 5) {
+      const w = Math.sqrt(Math.max(0, 1 - (y / R) ** 2));
+      c.lineTo(k * 19 * w + Math.sin(y * 0.22 + k * 2) * 3.5, y);
+    }
+    c.stroke();
+  }
+  c.restore();
+  circ(c, 0, 0, R); c.lineWidth = 3; c.strokeStyle = OL; c.stroke();
+  shine(c, -30, -30, 9, 15, 0.35);
+  eye(c, -21, -8, 11.5, 0); eye(c, 21, -8, 11.5, 0);
+  brow(c, -36, -27, -11, -17, 5); brow(c, 36, -27, 11, -17, 5);
+  c.beginPath(); c.moveTo(-25, 14); c.quadraticCurveTo(0, 50, 25, 14); c.closePath(); fs(c, '#e8344a', 2.6);
+  c.fillStyle = '#fff'; c.fillRect(-20, 14.5, 40, 4.5);
+  c.fillStyle = OL;
+  for (const [x, y] of [[-9, 26], [3, 31], [12, 24]]) { ell(c, x, y, 1.6, 2.6, 0.3); c.fill(); }
+  c.beginPath(); c.moveTo(-26, -56); c.lineTo(-31, -86); c.lineTo(-14, -69); c.lineTo(0, -92); c.lineTo(14, -69); c.lineTo(31, -86); c.lineTo(26, -56); c.closePath();
+  fs(c, lg(c, 0, -92, 0, -56, ['#fff3a0', '#ffc531', '#e08e0b']), 2.6);
+  circ(c, 0, -65, 4.5); fs(c, '#ff4d6d', 1.6);
+  circ(c, -17, -62, 3); fs(c, '#4fc3f7', 1.4); circ(c, 17, -62, 3); fs(c, '#4fc3f7', 1.4);
+}
+function drawSeed(c) {
+  c.beginPath(); c.moveTo(6, 0); c.quadraticCurveTo(0, -4.5, -5, 0); c.quadraticCurveTo(0, 4.5, 6, 0); fs(c, '#231a26', 1.2);
+  shine(c, -1, -1.2, 1.2, 0.7, 0.6);
+}
+
 // 敌人外观表：绘制函数 + 精灵尺寸 + 摇摆动画速度
 const ENEMY_ART = {
   broccoli: { draw: drawBroccoli, w: 46, h: 46, anim: 7 },
@@ -804,6 +851,7 @@ const ENEMY_ART = {
   yolk: { draw: drawYolk, w: 28, h: 28, anim: 14 },
   onion: { draw: drawOnion, w: 40, h: 56, ay: 30, anim: 7 },
   potato: { draw: drawPotato, w: 38, h: 38, anim: 6 },
+  boss: { draw: drawWatermelon, w: 140, h: 172, ay: 100, anim: 3 },
 };
 function buildEnemySprites(type, art) {
   const n = makeSprite(art.w, art.h, art.draw, art.ax ?? art.w / 2, art.ay ?? art.h / 2);
@@ -841,6 +889,7 @@ function buildSprites() {
   SPR.smokeL = glowSprite('rgba(235,225,245,0.7)', 48);
   SPR.potatoB = makeSprite(18, 18, drawPotatoBullet);
   SPR.pot = makeSprite(56, 30, drawPotArt, 24, 14);
+  SPR.seed = makeSprite(16, 12, drawSeed);
   SPR.chest = makeSprite(38, 34, drawChest, 19, 18);
   SPR.bun = makeSprite(36, 30, drawBun, 18, 14);
   SPR.magnet = makeSprite(40, 36, drawMagnetIcon, 20, 18);
@@ -1372,7 +1421,7 @@ function spawnEnemy(type, x, y) {
   e.dead = false; e.type = type; e.id = ++state.eid;
   e.x = x; e.y = y; e.vx = 0; e.vy = 0; e.kx = 0; e.ky = 0;
   e.r = d.r; e.hp = e.maxHp = d.hp * hpMul; e.speed = d.speed * rand(0.92, 1.08); e.dmg = d.dmg; e.mass = d.mass;
-  e.flash = 0; e.stun = 0; e.slowT = 0; e.slow = 0; e.burnT = 0; e.burnDps = 0; e.burnAcc = 0; e.burnW = null;
+  e.flash = -1; e.stun = 0; e.slowT = 0; e.slow = 0; e.burnT = 0; e.burnDps = 0; e.burnAcc = 0; e.burnW = null;
   e.hitCd.fill(0);
   e.elite = false; e.boss = false; e.dash = false; e.scale = 1; e.t = 0; e.phase = Math.random() * TAU;
   e.face = x < state.player.x ? 1 : -1; e.rot = 0; e.mode = 0; e.modeT = 0; e.shootT = rand(1, 2.5); e.dirx = 0; e.diry = 0;
@@ -1383,6 +1432,15 @@ function makeElite(e) {
   const E = CONFIG.elite;
   e.elite = true; e.scale = E.scale; e.r *= E.scale;
   e.hp = e.maxHp = e.maxHp * E.hpMul; e.dmg *= E.dmgMul; e.speed *= E.speedMul; e.mass *= E.massMul;
+  return e;
+}
+function spawnBoss(x, y, half, hp) {
+  const B = CONFIG.boss, e = spawnEnemy('boss', x, y);
+  e.boss = true; e.half = half; e.speed = B.speed * (half ? B.halfSpeedMul : 1);
+  e.scale = half ? B.halfScale : 1; e.r = CONFIG.enemies.boss.r * e.scale;
+  if (hp) e.hp = e.maxHp = hp;
+  e.baseDmg = e.dmg * (half ? 0.8 : 1); e.dmg = e.baseDmg;
+  e.mode = half ? 3 : 0; e.modeT = half ? 0.6 : 2.5;
   return e;
 }
 
@@ -1438,6 +1496,7 @@ function newState() {
     slowmo: 0, slowmoScale: 1,
     enemies: [], bullets: [], gems: [], fx: [], parts: [], ebullets: [], zones: [], pickups: [],
     banners: [], timers: [], evIdx: 0, warn: null, dark: 0, darkTarget: 0, siren: 0,
+    bossPhase: false, bossMax: 1, bossShown: null, won: false, winT: 0,
     kills: 0, eid: 0, spawnAcc: 0, noSpawn: false, dying: 0,
     level: 1, xp: 0, gold: 0, pendingLevels: 0, rerolls: CONFIG.levelUp.rerolls,
     pickCombo: 0, lastPick: -9, mergeT: 0,
@@ -1591,6 +1650,15 @@ function runEvent(ev) {
       showBanner('大潮来袭！', '食材从四面八方涌来，撑住！', '#ff5e57');
       break;
     }
+    case 'boss': {
+      const e = spawnBoss(p.x, p.y - view.wh / 2 - 120, false);
+      state.bossPhase = true; state.bossMax = e.maxHp; state.noSpawn = false;
+      state.darkTarget = 0.28;
+      showBanner('西瓜大王 登场！', '地上出现红色预警时快躲开它的滚动冲撞', '#ff5e57', 4);
+      shake(0.5);
+      Sound.play('boss');
+      break;
+    }
     case 'clear': {
       for (const e of state.enemies) if (!e.dead) { chips(e.x, e.y, 3, CONFIG.enemies[e.type].colors, 120, 4); killEnemy(e); }
       for (const b of state.ebullets) b.dead = true;
@@ -1606,7 +1674,8 @@ function runEvent(ev) {
 }
 function updateSpawning(dt) {
   if (state.noSpawn) return;
-  const c = curveAt(CONFIG.spawn.curve, state.t);
+  const B = CONFIG.boss.adds;
+  const c = state.bossPhase ? [0, B.rate, B.max] : curveAt(CONFIG.spawn.curve, state.t);
   state.spawnAcc += c[1] * dt;
   while (state.spawnAcc >= 1) {
     state.spawnAcc -= 1;
@@ -1649,7 +1718,7 @@ function hurtEnemy(e, base, w, dx, dy, kb, flags = 0) {
   let crit = false;
   if (!(flags & F_NOCRIT) && Math.random() < CONFIG.combat.critChance) { dmg *= CONFIG.combat.critMul; crit = true; }
   e.hp -= dmg;
-  if (!(flags & F_NOFLASH)) e.flash = CONFIG.combat.hitFlash;
+  if (!(flags & F_NOFLASH) && e.flash < -CONFIG.combat.flashGap) e.flash = CONFIG.combat.hitFlash; // 闪白有间隔，被围殴的大怪不会一直是白的
   if (kb && !e.boss) { const k = kb / e.mass; e.kx += dx * k; e.ky += dy * k; }
   if (w) w.dmg += dmg;
   onEnemyHit(e, dmg, crit);
@@ -1675,7 +1744,11 @@ function killEnemy(e) {
   } else if (e.type === 'onion') {
     addZone('gas', e.x, e.y, C.gasR * (e.elite ? 1.5 : 1), C.gasLife);
   }
-  if (e.elite) {
+  if (e.boss) {
+    for (let k = 0; k < CONFIG.boss.redGems; k++) spawnGem(e.x + rand(-30, 30), e.y + rand(-30, 30), CONFIG.gems.values[2]);
+    juiceBurst(e.x, e.y, 1);
+    shake(0.6);
+  } else if (e.elite) {
     spawnPickup('chest', e.x, e.y);
     for (let k = 0; k < CONFIG.elite.redGems; k++) spawnGem(e.x + rand(-10, 10), e.y + rand(-10, 10), CONFIG.gems.values[2]);
     shake(0.3);
@@ -1922,7 +1995,7 @@ function updateEnemies(dt) {
     const e = list[i];
     if (e.dead) continue;
     e.t += dt;
-    if (e.flash > 0) e.flash -= dt;
+    if (e.flash > -1) e.flash -= dt;
     const dx = p.x - e.x, dy = p.y - e.y;
     const d = Math.hypot(dx, dy) || 1;
     // 掉队太远：挪到玩家前方的屏幕外（保持压力）
@@ -1948,6 +2021,7 @@ function updateEnemies(dt) {
     let mvx = 0, mvy = 0;
     if (e.stun > 0) e.stun -= dt;
     else if (e.dash) { mvx = e.dirx * spd; mvy = e.diry * spd; }
+    else if (e.boss) { bossAI(e, dt, dx, dy, d, spd); mvx = e.vx; mvy = e.vy; }
     else if (e.type === 'potato') { potatoAI(e, dt, dx, dy, d, spd); mvx = e.vx; mvy = e.vy; }
     else { mvx = (dx / d) * spd; mvy = (dy / d) * spd; }
     e.vx = mvx; e.vy = mvy;
@@ -1966,10 +2040,108 @@ function updateEnemies(dt) {
     if (ed2 < cr * cr) {
       hurtPlayer(e.dmg);
       const minD = (e.r + p.r) * 0.82, ed = Math.sqrt(ed2) || 1;
-      if (ed < minD) { e.x = p.x + (ex / ed) * minD; e.y = p.y + (ey / ed) * minD; }
+      if (ed < minD) {
+        if (e.boss) { p.x = e.x - (ex / ed) * minD; p.y = e.y - (ey / ed) * minD; } // 被 Boss 顶开
+        else { e.x = p.x + (ex / ed) * minD; e.y = p.y + (ey / ed) * minD; }
+      }
     }
   }
   separate();
+}
+
+// 西瓜大王：追击 → 蓄力（地上红色预警）→ 滚动冲撞 → 喷西瓜籽喘口气
+function bossAI(e, dt, dx, dy, d, spd) {
+  const B = CONFIG.boss;
+  e.modeT -= dt;
+  e.dmg = e.baseDmg;
+  switch (e.mode) {
+    case 0:
+      e.vx = (dx / d) * spd; e.vy = (dy / d) * spd;
+      e.rot += angleDiff(e.rot, 0) * Math.min(1, dt * 5);
+      if (e.modeT <= 0) { e.mode = 1; e.modeT = B.windup; e.dirx = dx / d; e.diry = dy / d; Sound.play('bossWarn'); }
+      break;
+    case 1: {
+      e.vx = 0; e.vy = 0;
+      if (e.modeT > B.windup * 0.45) { // 前半段还会微调方向
+        const k = Math.min(1, dt * 5);
+        e.dirx = lerp(e.dirx, dx / d, k); e.diry = lerp(e.diry, dy / d, k);
+        const l = Math.hypot(e.dirx, e.diry) || 1; e.dirx /= l; e.diry /= l;
+      }
+      e.rot = Math.sin(e.t * 40) * 0.08;
+      if (e.modeT <= 0) { e.mode = 2; e.modeT = B.rollTime; shake(0.25); Sound.play('roll'); }
+      break;
+    }
+    case 2: {
+      const rs = B.rollSpeed * (e.half ? B.halfSpeedMul : 1) * (e.slowT > 0 ? 1 - e.slow : 1);
+      e.vx = e.dirx * rs; e.vy = e.diry * rs;
+      e.dmg = B.rollDmg * (e.half ? 0.8 : 1);
+      e.rot += ((rs / e.r) * dt) * (e.dirx >= 0 ? 1 : -1);
+      if (Math.random() < dt * 30) chips(e.x - e.dirx * e.r * 0.6, e.y + e.r * 0.8, 1, ['#8d7a6a', '#b8a898'], 80, 4);
+      if (e.modeT <= 0) { e.mode = 3; e.modeT = B.recover; spitSeeds(e); }
+      break;
+    }
+    default:
+      e.vx = 0; e.vy = 0;
+      e.rot += angleDiff(e.rot, 0) * Math.min(1, dt * 6);
+      if (e.modeT <= 0) { e.mode = 0; e.modeT = rand(...B.chaseTime) / (e.half ? B.halfSpeedMul : 1); }
+  }
+  // 血量过半：裂成两个小西瓜
+  if (!e.half && e.hp <= e.maxHp * B.split) splitBoss(e);
+}
+function spitSeeds(e) {
+  const B = CONFIG.boss, n = e.half ? B.halfSeeds : B.seeds, off = Math.random() * TAU;
+  for (let i = 0; i < n; i++) {
+    const a = off + (i / n) * TAU;
+    spawnEBullet('seed', e.x + Math.cos(a) * e.r * 0.7, e.y + Math.sin(a) * e.r * 0.7, Math.cos(a) * B.seedSpeed, Math.sin(a) * B.seedSpeed, 6, B.seedDmg, 4);
+  }
+  Sound.play('spit');
+}
+function splitBoss(e) {
+  e.dead = true;
+  const hp = Math.max(1, e.hp) / 2;
+  for (const s of [-1, 1]) {
+    const h = spawnBoss(e.x + s * 45, e.y, true, hp);
+    h.kx = s * 380;
+  }
+  juiceBurst(e.x, e.y, 1.3);
+  shake(0.7);
+  state.slowmo = 0.6; state.slowmoScale = 0.3;
+  showBanner('西瓜大王裂开了！', '两个小西瓜跑得更快了', '#ff7eb6', 3);
+  Sound.play('split');
+}
+// 西瓜汁飞溅
+function juiceBurst(x, y, k) {
+  chips(x, y, Math.round(26 * k), ['#e8344a', '#ff6b81', '#2e7d32', '#9be07a', '#231a26'], 340 * k, 6);
+  for (let i = 0; i < 16 * k; i++) {
+    const a = Math.random() * TAU, sp = rand(80, 260) * k;
+    const q = addPart(P_GLOW, x, y, Math.cos(a) * sp, Math.sin(a) * sp, rand(0.4, 0.7), rand(0.5, 0.9), 0, SPR.glowR);
+    if (q) q.drag = 3;
+  }
+  addRing(x, y, 160 * k, 0.5, 'rgba(255,107,129,0.9)', 8);
+}
+
+// 打败 Boss：庆祝一下再结算
+function checkWin(dt) {
+  if (!state.bossPhase) return;
+  if (!state.won) {
+    for (const e of state.enemies) if (e.boss && !e.dead) return;
+    state.won = true; state.winT = 1.4;
+    state.noSpawn = true; state.vacuum = true; state.darkTarget = 0;
+    state.slowmo = 1.2; state.slowmoScale = 0.35;
+    state.player.invuln = 99;
+    for (const e of state.enemies) if (!e.dead) { chips(e.x, e.y, 3, CONFIG.enemies[e.type].colors, 120, 4); killEnemy(e); }
+    for (const b of state.ebullets) b.dead = true;
+    showBanner('通关！', '西瓜大王被打败了，厨房保住了！', '#ffd23f', 3);
+    Sound.play('win');
+    return;
+  }
+  state.winT -= dt;
+  state.vacuum = true;
+  if (Math.random() < dt * 14) { // 烟花
+    const x = cam.x + rand(-0.4, 0.4) * view.ww, y = cam.y + rand(-0.4, 0.3) * view.wh, spr = pick([SPR.glowG, SPR.glowR, SPR.glowC, SPR.glowP]);
+    for (let i = 0; i < 18; i++) { const a = (i / 18) * TAU, sp = rand(140, 220); const q = addPart(P_GLOW, x, y, Math.cos(a) * sp, Math.sin(a) * sp, 0.8, 0.3, 0, spr); if (q) q.drag = 2.2; }
+  }
+  if (state.winT <= 0) endRun(true);
 }
 
 // 土豆炮手：停在远处吐土豆
@@ -2112,6 +2284,7 @@ function update(dt) {
   updateZones(dt);
   if (state.dying <= 0) updatePickups(dt);
   updateBanners(dt);
+  if (state.dying <= 0) checkWin(dt);
   if (state.dying <= 0) updateGems(dt);
   updateParts(dt);
   updateFx(dt);
@@ -2242,6 +2415,26 @@ function drawZones() {
     } else if (ZONE_DRAW[z.kind]) ZONE_DRAW[z.kind](z, a);
   }
 }
+// Boss 冲撞预警：地上的红色通道
+function drawBossTelegraph() {
+  for (const e of state.enemies) {
+    if (!e.boss || e.dead || e.mode !== 1) continue;
+    const B = CONFIG.boss, len = B.rollSpeed * (e.half ? B.halfSpeedMul : 1) * B.rollTime, w = e.r * 2;
+    const ang = Math.atan2(e.diry, e.dirx), k = 1 - e.modeT / B.windup;
+    const co = Math.cos(ang), si = Math.sin(ang);
+    ctx.setTransform(K * co, K * si, -K * si, K * co, OX + e.x * K, OY + e.y * K);
+    ctx.fillStyle = `rgba(255,40,40,${0.12 + k * 0.18 + Math.sin(state.t * 30) * 0.05})`;
+    ctx.fillRect(0, -w / 2, len, w);
+    ctx.fillStyle = `rgba(255,60,60,${0.5 + k * 0.4})`;
+    ctx.fillRect(0, -w / 2, len * k, 3); ctx.fillRect(0, w / 2 - 3, len * k, 3);
+    ctx.strokeStyle = `rgba(255,120,100,${0.5 + k * 0.4})`; ctx.lineWidth = 5;
+    for (let i = 1; i <= 4; i++) {
+      const x = ((i / 5 + state.t * 0.8) % 1) * len;
+      ctx.beginPath(); ctx.moveTo(x - 12, -16); ctx.lineTo(x + 6, 0); ctx.lineTo(x - 12, 16); ctx.stroke();
+    }
+  }
+}
+
 function drawPickups() {
   for (const q of state.pickups) {
     if (!onScreen(q.x, q.y, 40)) continue;
@@ -2333,6 +2526,7 @@ function drawPlayer() {
 function renderWorld() {
   drawFloor();
   drawZones();
+  drawBossTelegraph();
   if (state.player.hp > 0) drawWeapons(true);
   drawGems();
   drawPickups();
@@ -2441,6 +2635,21 @@ function edgeArrow(wx, wy, color, iconId, label) {
   else if (label) text(label, ax, ay + 1, 13 * u, color);
 }
 
+function renderBossBar() {
+  const u = view.ui, w = Math.min(560 * u, view.w - 40 * u), h = 16 * u, x = view.w / 2 - w / 2, y = view.h - 54 * u;
+  let hp = 0;
+  for (const e of state.enemies) if (e.boss && !e.dead) hp += Math.max(0, e.hp);
+  const f = clamp(hp / state.bossMax, 0, 1);
+  state.bossShown = state.bossShown == null ? f : lerp(state.bossShown, f, 0.08);
+  rr(ctx, x - 3 * u, y - 3 * u, w + 6 * u, h + 6 * u, 9 * u); ctx.fillStyle = 'rgba(20,12,24,0.85)'; ctx.fill();
+  rr(ctx, x, y, w * state.bossShown, h, 6 * u); ctx.fillStyle = '#ffd0d0'; ctx.fill();
+  rr(ctx, x, y, w * f, h, 6 * u); ctx.fillStyle = lg(ctx, x, 0, x + w, 0, ['#ff5e57', '#ff2e63']); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.fillRect(x + 4 * u, y + 2 * u, Math.max(0, w * f - 8 * u), h * 0.3);
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(x + w * CONFIG.boss.split, y - 2 * u); ctx.lineTo(x + w * CONFIG.boss.split, y + h + 2 * u); ctx.stroke();
+  textO('西瓜大王', view.w / 2, y - 14 * u, 18 * u, '#ffd0d0', OL, 5 * u);
+}
+
 function renderBanners() {
   const b = state.banners[0], u = view.ui;
   if (b) {
@@ -2476,6 +2685,8 @@ function renderHUD() {
   renderInventory();
   for (const q of state.pickups) if (q.kind === 'chest') edgeArrow(q.x, q.y, '#ffd23f', 'chest');
   for (const e of state.enemies) if (e.elite) edgeArrow(e.x, e.y, '#ffb84d', null, '精');
+  for (const e of state.enemies) if (e.boss) edgeArrow(e.x, e.y, '#ff5e57', null, '王');
+  if (state.bossPhase && !state.won) renderBossBar();
   renderBanners();
   textO(fmtTime(state.t), view.w - 22 * u, 48 * u, 30 * u, '#fff7ec', OL, 5 * u, 'right');
   textO(`击杀 ${state.kills}`, view.w - 22 * u, 78 * u, 17 * u, '#ffd9a8', OL, 4 * u, 'right');
@@ -2805,7 +3016,8 @@ function renderOver() {
   dim(0.7 * k);
   const u = view.ui, cx = view.w / 2, cy = view.h / 2;
   ctx.globalAlpha = k;
-  textO('你被食材淹没了……', cx, cy - 60 * u, 46 * u, '#ff8a7a', OL, 8 * u);
+  if (game.phase === 'win') textO('厨房保卫成功！', cx, cy - 60 * u, 46 * u, '#ffd23f', OL, 8 * u);
+  else textO('你被食材淹没了……', cx, cy - 60 * u, 46 * u, '#ff8a7a', OL, 8 * u);
   text(`存活 ${fmtTime(state.t)}  ·  击杀 ${state.kills}`, cx, cy + 6 * u, 22 * u, '#f3e9ff');
   if (Math.sin(game.time * 5) > -0.3) textO('按 R 重新开始', cx, cy + 70 * u, 26 * u, '#ffffff', OL, 6 * u);
   ctx.globalAlpha = 1;
@@ -2866,7 +3078,7 @@ function render() {
   renderWorld();
   renderHUD();
   if (game.phase === 'pause') renderPause();
-  else if (game.phase === 'over') renderOver();
+  else if (game.phase === 'over' || game.phase === 'win') renderOver();
   else if (game.phase === 'levelup') renderLevelUp();
 }
 
