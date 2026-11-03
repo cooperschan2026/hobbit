@@ -29,7 +29,8 @@ const CONFIG = {
     invuln: 0.5,           // 受击无敌时间
     lowHp: 0.3,            // 低于 30% 血量进入危险状态
   },
-  combat: { critChance: 0.1, critMul: 2, hitFlash: 0.07, flashGap: 0.1 },
+  combat: { critChance: 0.1, critMul: 2, hitFlash: 0.05, flashGap: 0.1 },
+  audio: { volume: 0.5, heartbeat: 0.9 },
   difficulty: { hpPerMin: 0.15 },   // 敌人血量每分钟 +15%
   grid: { cell: 64 },
   spawn: {
@@ -53,7 +54,7 @@ const CONFIG = {
   },
   drops: { green: 0.03, greenPerMin: 0.018, red: 0.0, redPerMin: 0.003 },
   levelUp: { rerolls: 2, shockRadius: 230, shockForce: 620, healAmount: 30, goldAmount: 50, inputDelay: 0.28 },
-  fx: { maxParticles: 900 },
+  fx: { maxParticles: 900, maxTexts: 90, killChips: 5 },
   // 被动道具：每级效果
   passives: {
     whetstone: { might: 0.10 },          // 磨刀石：伤害 +10%
@@ -349,27 +350,110 @@ const KEYS = {
 // =====================================================================
 // 音效（WebAudio 现场合成）
 // =====================================================================
+// 同一种音效的最短间隔（秒），防止几百个敌人同时挨打时爆音
+const SFX_GAP = { hit: 0.035, kill: 0.03, pick: 0.022, throw: 0.06, whoosh: 0.09, clang: 0.07, boom: 0.08, spit: 0.12, fire: 0.25, hurt: 0.1, select: 0.04, heal: 0.1 };
+const PICK_SCALE = [0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 17, 19, 21, 23, 24];
 const Sound = {
-  ctx: null,
-  master: null,
+  ctx: null, master: null, noiseBuf: null, last: Object.create(null),
   unlock() {
     if (!this.ctx) {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return;
       try {
-        this.ctx = new AC();
-        this.master = this.ctx.createGain();
-        this.master.gain.value = game.settings.muted ? 0 : 0.5;
-        this.master.connect(this.ctx.destination);
+        const c = new AC();
+        this.ctx = c;
+        this.master = c.createGain();
+        this.master.gain.value = game.settings.muted ? 0 : CONFIG.audio.volume;
+        const comp = c.createDynamicsCompressor();
+        comp.threshold.value = -14; comp.ratio.value = 6;
+        this.master.connect(comp); comp.connect(c.destination);
+        const buf = c.createBuffer(1, c.sampleRate, c.sampleRate), d = buf.getChannelData(0);
+        for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+        this.noiseBuf = buf;
       } catch (e) { this.ctx = null; return; }
     }
     if (this.ctx.state === 'suspended') this.ctx.resume();
   },
   setMuted(m) {
     game.settings.muted = m;
-    if (this.master) this.master.gain.value = m ? 0 : 0.5;
+    if (this.master) this.master.gain.setTargetAtTime(m ? 0 : CONFIG.audio.volume, this.ctx.currentTime, 0.02);
   },
-  play() {},
+  env(g, t, vol, dur, attack = 0.005) {
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + attack + dur);
+  },
+  // 单个振荡器音（可滑音）
+  tone(type, f0, f1, dur, vol, delay = 0) {
+    const c = this.ctx, t = c.currentTime + delay;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(f0, t);
+    if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    this.env(g, t, vol, dur);
+    o.connect(g); g.connect(this.master);
+    o.start(t); o.stop(t + dur + 0.03);
+  },
+  // 滤波噪声（噗、嗖、轰）
+  noise(dur, vol, type, f0, f1, q = 1, delay = 0) {
+    const c = this.ctx, t = c.currentTime + delay;
+    const src = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    src.buffer = this.noiseBuf;
+    f.type = type; f.Q.value = q;
+    f.frequency.setValueAtTime(f0, t);
+    if (f1) f.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    this.env(g, t, vol, dur, 0.004);
+    src.connect(f); f.connect(g); g.connect(this.master);
+    src.start(t, Math.random() * 0.4); src.stop(t + dur + 0.05);
+  },
+  play(name, arg) {
+    if (!this.ctx || game.settings.muted || this.ctx.state !== 'running') return;
+    const now = this.ctx.currentTime, gap = SFX_GAP[name] || 0;
+    if (gap && now - (this.last[name] ?? -9) < gap) return;
+    this.last[name] = now;
+    const fn = SFX[name];
+    if (fn) try { fn(this, arg); } catch (e) { /* 个别浏览器不支持某些参数时静默 */ }
+  },
+};
+const SFX = {
+  hit: (s) => { s.noise(0.06, 0.16, 'bandpass', rand(700, 1100), 260, 1.2); s.tone('sine', 230, 90, 0.06, 0.1); },
+  kill: (s) => s.tone('triangle', rand(480, 620), 140, 0.09, 0.09),
+  pick: (s, combo) => {
+    const f = 700 * Math.pow(2, PICK_SCALE[Math.min(combo | 0, PICK_SCALE.length - 1)] / 12);
+    s.tone('sine', f, f, 0.08, 0.13); s.tone('triangle', f * 2, f * 2, 0.05, 0.035);
+  },
+  throw: (s) => s.noise(0.07, 0.05, 'bandpass', 2600, 900, 2),
+  whoosh: (s) => s.noise(0.18, 0.07, 'bandpass', 600, 1900, 1.5),
+  fire: (s) => { s.noise(0.55, 0.09, 'lowpass', 2000, 500, 0.7); s.noise(0.35, 0.04, 'bandpass', 3200, 1500, 1); },
+  boom: (s) => { s.noise(0.45, 0.3, 'lowpass', 1400, 80, 0.8); s.tone('sine', 140, 40, 0.35, 0.28); s.noise(0.12, 0.06, 'highpass', 2500, 5000, 1, 0.12); },
+  clang: (s) => { s.tone('square', 520, 500, 0.16, 0.045); s.tone('square', 790, 770, 0.14, 0.035); s.noise(0.1, 0.1, 'highpass', 3000, 0, 0.7); s.tone('sine', 110, 50, 0.15, 0.15); },
+  hurt: (s) => { s.tone('sawtooth', 320, 90, 0.2, 0.16); s.noise(0.15, 0.14, 'lowpass', 900, 200); },
+  heart: (s) => { s.tone('sine', 78, 50, 0.13, 0.42); s.tone('sine', 72, 46, 0.12, 0.3, 0.17); },
+  levelup: (s) => { [523, 659, 784, 1047].forEach((f, i) => s.tone('triangle', f, f, 0.14, 0.13, i * 0.07)); s.tone('sine', 2093, 2093, 0.25, 0.05, 0.3); },
+  select: (s) => s.tone('triangle', 880, 1320, 0.08, 0.1),
+  chest: (s) => { [784, 988, 1175, 1568, 1976].forEach((f, i) => s.tone('sine', f, f, 0.16, 0.1, i * 0.06)); s.noise(0.5, 0.04, 'highpass', 5000, 9000, 1, 0.1); },
+  evolve: (s) => { [523, 659, 784, 988].forEach((f) => s.tone('triangle', f, f, 0.9, 0.08)); s.tone('sine', 400, 1600, 0.6, 0.08); s.noise(0.8, 0.05, 'highpass', 4000, 9000, 1, 0.1); },
+  heal: (s) => { s.tone('sine', 660, 990, 0.14, 0.12); s.tone('sine', 990, 1320, 0.14, 0.1, 0.1); },
+  magnet: (s) => { s.tone('sawtooth', 200, 900, 0.35, 0.05); s.tone('sine', 400, 1600, 0.35, 0.08); },
+  warn: (s) => { s.tone('square', 880, 880, 0.09, 0.05); s.tone('square', 660, 660, 0.09, 0.05, 0.12); },
+  rush: (s) => s.noise(0.7, 0.12, 'bandpass', 700, 2600, 1.2),
+  vortex: (s) => s.noise(1.0, 0.09, 'bandpass', 300, 1300, 2),
+  spit: (s) => s.tone('square', 320, 140, 0.07, 0.05),
+  bossWarn: (s) => s.tone('sawtooth', 150, 320, 0.5, 0.1),
+  roll: (s) => { s.noise(0.9, 0.2, 'lowpass', 320, 110, 0.7); s.tone('sine', 62, 40, 0.8, 0.25); },
+  boss: (s) => { s.tone('sawtooth', 72, 45, 1.3, 0.22); s.noise(1.1, 0.18, 'lowpass', 500, 60, 0.7); },
+  split: (s) => { s.noise(0.5, 0.3, 'lowpass', 1600, 100, 0.8); s.noise(0.25, 0.15, 'bandpass', 900, 300, 2, 0.05); s.tone('sine', 120, 40, 0.4, 0.3); },
+  siren: (s) => {
+    const c = s.ctx, t = c.currentTime, o = c.createOscillator(), g = c.createGain(), f = c.createBiquadFilter();
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(500, t);
+    for (let i = 0; i < 6; i++) { o.frequency.linearRampToValueAtTime(900, t + i * 0.6 + 0.3); o.frequency.linearRampToValueAtTime(500, t + i * 0.6 + 0.6); }
+    f.type = 'lowpass'; f.frequency.value = 1800;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.06, t + 0.05);
+    g.gain.setValueAtTime(0.06, t + 3.3); g.gain.exponentialRampToValueAtTime(0.0001, t + 3.6);
+    o.connect(f); f.connect(g); g.connect(s.master); o.start(t); o.stop(t + 3.7);
+  },
+  win: (s) => { [[523, 0], [659, 0.12], [784, 0.24], [1047, 0.36], [784, 0.52], [1047, 0.64]].forEach(([f, d]) => s.tone('triangle', f, f, d > 0.6 ? 0.6 : 0.14, 0.13, d)); },
+  lose: (s) => { [392, 330, 262, 196].forEach((f, i) => s.tone('triangle', f, f * 0.97, 0.3, 0.12, i * 0.2)); },
 };
 
 // =====================================================================
@@ -1213,32 +1297,32 @@ const PASSIVE_ORDER = [];
 function defPassive(def) { PASSIVES[def.id] = def; PASSIVE_ORDER.push(def.id); }
 const PC = CONFIG.passives;
 defPassive({
-  id: 'whetstone', name: '磨刀石', desc: `所有伤害 +${PC.whetstone.might * 100}%`, label: '伤害加成',
+  id: 'whetstone', name: '磨刀石', flavor: '刀磨得越快，菜切得越碎。', desc: `所有伤害 +${PC.whetstone.might * 100}%`, label: '伤害加成',
   total: (lv) => `+${Math.round(lv * PC.whetstone.might * 100)}%`,
   apply: (p, lv) => { p.might += lv * PC.whetstone.might; },
 });
 defPassive({
-  id: 'shoes', name: '跑鞋', desc: `移动速度 +${PC.shoes.speed * 100}%`, label: '移速加成',
+  id: 'shoes', name: '跑鞋', flavor: '跑得快，才能活得久。', desc: `移动速度 +${PC.shoes.speed * 100}%`, label: '移速加成',
   total: (lv) => `+${Math.round(lv * PC.shoes.speed * 100)}%`,
   apply: (p, lv) => { p.spdMul += lv * PC.shoes.speed; },
 });
 defPassive({
-  id: 'apron', name: '围裙', desc: `最大生命 +${PC.apron.hp}，每秒回复 ${PC.apron.regen} 生命`, label: '生命/回复',
+  id: 'apron', name: '围裙', flavor: '系上围裙，越战越勇。', desc: `最大生命 +${PC.apron.hp}，每秒回复 ${PC.apron.regen} 生命`, label: '生命/回复',
   total: (lv) => `+${lv * PC.apron.hp} / ${fmtNum(lv * PC.apron.regen)}每秒`,
   apply: (p, lv) => { p.maxHp += lv * PC.apron.hp; p.regen += lv * PC.apron.regen; },
 });
 defPassive({
-  id: 'magnet', name: '大磁铁', desc: `拾取范围 +${PC.magnet.pickup * 100}%`, label: '拾取范围',
+  id: 'magnet', name: '大磁铁', flavor: '调料晶会自己飞过来。', desc: `拾取范围 +${PC.magnet.pickup * 100}%`, label: '拾取范围',
   total: (lv) => `+${Math.round(lv * PC.magnet.pickup * 100)}%`,
   apply: (p, lv) => { p.pickupMul += lv * PC.magnet.pickup; },
 });
 defPassive({
-  id: 'clock', name: '闹钟', desc: `武器冷却 -${PC.clock.cd * 100}%`, label: '冷却缩减',
+  id: 'clock', name: '闹钟', flavor: '叮铃铃！厨具出手更勤快。', desc: `武器冷却 -${PC.clock.cd * 100}%`, label: '冷却缩减',
   total: (lv) => `-${Math.round(lv * PC.clock.cd * 100)}%`,
   apply: (p, lv) => { p.cdMul -= lv * PC.clock.cd; },
 });
 defPassive({
-  id: 'wrap', name: '保鲜膜', desc: `受到的伤害 -${PC.wrap.armor}（固定减伤）`, label: '减伤',
+  id: 'wrap', name: '保鲜膜', flavor: '裹上一层，挨打没那么疼。', desc: `受到的伤害 -${PC.wrap.armor}（固定减伤）`, label: '减伤',
   total: (lv) => `-${lv * PC.wrap.armor}`,
   apply: (p, lv) => { p.armor += lv * PC.wrap.armor; },
 });
@@ -1474,6 +1558,10 @@ const game = {
   time: 0,        // 真实时间（界面动画用）
   settings: Object.assign({ shake: true, muted: false, numbers: true }, store.get('kr_settings', {})),
   debug: /[?&]debug=1/.test(location.search),
+  best: store.get('kr_best', null),
+  stats: store.get('kr_stats', { runs: 0, wins: 0 }),
+  btns: [],
+  confirmRestart: 0,
   fps: 60, upMs: 0, drawMs: 0,
 };
 let state = null;
@@ -1494,7 +1582,7 @@ function newState() {
     t: 0,
     player: makePlayer(),
     slowmo: 0, slowmoScale: 1,
-    enemies: [], bullets: [], gems: [], fx: [], parts: [], ebullets: [], zones: [], pickups: [],
+    enemies: [], bullets: [], gems: [], fx: [], parts: [], ebullets: [], zones: [], pickups: [], texts: [],
     banners: [], timers: [], evIdx: 0, warn: null, dark: 0, darkTarget: 0, siren: 0,
     bossPhase: false, bossMax: 1, bossShown: null, won: false, winT: 0,
     kills: 0, eid: 0, spawnAcc: 0, noSpawn: false, dying: 0,
@@ -1539,6 +1627,17 @@ function recalcStats() {
 function endRun(win) {
   game.phase = win ? 'win' : 'over';
   game.endAt = game.time;
+  // 本地最佳成绩：通关 > 未通关；同类比较存活时间/击杀
+  const rec = { time: Math.floor(state.t), kills: state.kills, level: state.level, win, evo: state.evolutions || 0 };
+  const score = (r) => (r.win ? 1e9 + r.kills : r.time * 1e5 + r.kills);
+  game.newBest = !game.best || score(rec) > score(game.best);
+  if (game.newBest) game.best = rec;
+  game.stats.runs++;
+  if (win) game.stats.wins++;
+  store.set('kr_best', game.best);
+  store.set('kr_stats', game.stats);
+  game.ranking = state.player.weapons.map((w) => ({ id: w.id, name: wName(w), evo: w.evo, lv: w.lv, dmg: w.dmg })).sort((a, b) => b.dmg - a.dmg);
+  if (!win) Sound.play('lose');
 }
 
 function saveSettings() { store.set('kr_settings', game.settings); }
@@ -1721,11 +1820,17 @@ function hurtEnemy(e, base, w, dx, dy, kb, flags = 0) {
   if (!(flags & F_NOFLASH) && e.flash < -CONFIG.combat.flashGap) e.flash = CONFIG.combat.hitFlash; // 闪白有间隔，被围殴的大怪不会一直是白的
   if (kb && !e.boss) { const k = kb / e.mass; e.kx += dx * k; e.ky += dy * k; }
   if (w) w.dmg += dmg;
-  onEnemyHit(e, dmg, crit);
+  onEnemyHit(e, dmg, crit, flags);
   if (e.hp <= 0) killEnemy(e, w);
   return dmg;
 }
-function onEnemyHit() { Sound.play('hit'); }
+function onEnemyHit(e, dmg, crit, flags) {
+  if (!(flags & F_BURN)) Sound.play('hit');
+  if (!game.settings.numbers) return;
+  const v = Math.round(dmg);
+  if (v < 1 || (!crit && state.texts.length >= CONFIG.fx.maxTexts * 0.8)) return;
+  floatText(e.x + rand(-7, 7), e.y - e.r * e.scale - 6, String(v), crit ? '#ffd23f' : flags & F_BURN ? '#ff9a4d' : '#ffffff', crit ? 21 : 13, crit ? 0.8 : 0.55, crit);
+}
 
 function killEnemy(e) {
   if (e.dead) return;
@@ -1734,6 +1839,7 @@ function killEnemy(e) {
   Sound.play('kill');
   dropGems(e);
   const C = CONFIG.enemies[e.type];
+  if (!e.boss) chips(e.x, e.y - e.r * 0.3, e.elite ? 18 : CONFIG.fx.killChips, C.colors, e.elite ? 280 : 150, e.elite ? 6 : 4.2);
   if (e.type === 'egg') { // 碎成小蛋黄继续追
     for (let k = 0; k < C.split; k++) {
       const a = (k / C.split) * TAU + rand(-0.4, 0.4);
@@ -1871,7 +1977,14 @@ function explosionFx(x, y, r, style) {
   }
 }
 // 伤害/提示飘字（第 8 步扩展）
-function floatText() {}
+const textPool = new Pool(() => ({}));
+function floatText(x, y, str, color, size, life, big) {
+  if (state.texts.length >= CONFIG.fx.maxTexts) return;
+  const t = textPool.get();
+  t.dead = false; t.x = x; t.y = y; t.str = str; t.color = color; t.size = size; t.life = t.max = life;
+  t.vx = rand(-18, 18); t.vy = big ? -80 : -60; t.big = !!big;
+  state.texts.push(t);
+}
 
 function hurtPlayer(raw) {
   const p = state.player;
@@ -1882,11 +1995,13 @@ function hurtPlayer(raw) {
   p.hurtT = 0.35;
   shake(0.32);
   Sound.play('hurt');
+  floatText(p.x, p.y - 34, `-${Math.round(dmg)}`, '#ff5e57', 17, 0.7, true);
   if (p.hp <= 0) {
     p.hp = 0;
     state.dying = 0.55;
     state.slowmo = 1.6; state.slowmoScale = 0.3;
     shake(0.6);
+    chips(p.x, p.y, 14, ['#ffffff', '#ef4b3f', '#ffd9b8'], 220, 5);
   }
 }
 // =====================================================================
@@ -1920,6 +2035,11 @@ function updatePlayer(dt) {
   p.moving = sp > 10;
   p.walkT += dt * (sp / spd) * 2.2;
   if (p.invuln > 0) p.invuln -= dt;
+  if (p.hurtT > 0) p.hurtT -= dt;
+  if (p.hp > 0 && p.hp < p.maxHp * CONFIG.player.lowHp) { // 低血量心跳
+    p.heartT = (p.heartT || 0) - dt;
+    if (p.heartT <= 0) { p.heartT = CONFIG.audio.heartbeat; Sound.play('heart'); }
+  }
   if (p.regen > 0 && p.hp > 0) p.hp = Math.min(p.maxHp, p.hp + p.regen * dt);
 }
 
@@ -1976,6 +2096,18 @@ function updateParts(dt) {
     }
   }
   compact(ps, partPool);
+}
+
+function updateTexts(dt) {
+  const ts = state.texts;
+  for (let i = 0; i < ts.length; i++) {
+    const t = ts[i];
+    t.life -= dt;
+    if (t.life <= 0) { t.dead = true; continue; }
+    t.x += t.vx * dt; t.y += t.vy * dt;
+    t.vy *= Math.exp(-dt * 4); t.vx *= Math.exp(-dt * 4);
+  }
+  compact(ts, textPool);
 }
 
 function updateFx(dt) {
@@ -2287,6 +2419,7 @@ function update(dt) {
   if (state.dying <= 0) checkWin(dt);
   if (state.dying <= 0) updateGems(dt);
   updateParts(dt);
+  updateTexts(dt);
   updateFx(dt);
   updateCamera(dt, p.x, p.y);
   compact(state.enemies, enemyPool);
@@ -2489,6 +2622,27 @@ function drawParts(additive) {
   ctx.globalCompositeOperation = 'source-over';
 }
 
+function drawTexts() {
+  const ts = state.texts;
+  if (!ts.length) return;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  let lastSize = 0;
+  for (let i = 0; i < ts.length; i++) {
+    const t = ts[i];
+    if (!onScreen(t.x, t.y, 40)) continue;
+    const age = t.max - t.life;
+    const pop = age < 0.1 ? 1 + (1 - age / 0.1) * (t.big ? 0.8 : 0.4) : 1;
+    ctx.setTransform(K * pop, 0, 0, K * pop, OX + t.x * K, OY + t.y * K);
+    if (t.size !== lastSize) { ctx.font = font(t.size, '900'); lastSize = t.size; }
+    ctx.globalAlpha = Math.min(1, t.life / (t.max * 0.4));
+    ctx.fillStyle = 'rgba(30,16,32,0.9)';
+    ctx.fillText(t.str, 1.2, 1.6);
+    ctx.fillStyle = t.color;
+    ctx.fillText(t.str, 0, 0);
+  }
+  ctx.globalAlpha = 1;
+}
+
 function drawWeapons(ground) {
   const ws = state.player.weapons;
   for (let i = 0; i < ws.length; i++) {
@@ -2538,6 +2692,7 @@ function renderWorld() {
   drawEBullets();
   drawParts(true);
   drawFx();
+  drawTexts();
   drawEliteBars();
   // 7:30 之后屏幕变暗，只留主角周围一圈光
   if (state.dark > 0.01) {
@@ -2551,6 +2706,15 @@ function renderWorld() {
   // 暗角
   setUI();
   ctx.drawImage(SPR.vignette, 0, 0, view.w, view.h);
+  // 受击红闪 + 低血量时屏幕边缘泛红
+  const p = state.player;
+  let red = p.hurtT > 0 ? (p.hurtT / 0.35) * 0.5 : 0;
+  if (p.hp > 0 && p.hp < p.maxHp * CONFIG.player.lowHp) red = Math.max(red, 0.28 + Math.sin(game.time * 7) * 0.14);
+  if (red > 0.01) {
+    const g = ctx.createRadialGradient(view.w / 2, view.h / 2, Math.min(view.w, view.h) * 0.32, view.w / 2, view.h / 2, Math.max(view.w, view.h) * 0.72);
+    g.addColorStop(0, 'rgba(255,20,40,0)'); g.addColorStop(1, `rgba(255,20,40,${red})`);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, view.w, view.h);
+  }
   // 升级金光
   const fk = game.flashAt != null ? 1 - (game.time - game.flashAt) / 0.7 : 0;
   if (fk > 0) {
@@ -2731,22 +2895,171 @@ function renderTitle() {
   ctx.drawImage(SPR.player.c, -SPR.player.ax * sprRes, -SPR.player.ay * sprRes);
   ctx.restore();
   // 操作说明
-  const rows = [['WASD / 方向键', '移动'], ['1 / 2 / 3 或鼠标', '升级时选卡'], ['P / Esc', '暂停'], ['M', '静音'], ['R', '死亡/通关后重开']];
-  const pw = 420 * u, ph = (rows.length * 28 + 26) * u, px = cx - pw / 2, py = cy + 66 * u;
+  // 围着小厨师蹦跶的食材
+  const foes = ['broccoli', 'chili', 'egg', 'onion', 'potato', 'yolk'];
+  foes.forEach((f, i) => {
+    const s = SPR.enemy[f].n, side = i % 2 ? 1 : -1, row = Math.floor(i / 2);
+    const x = cx + side * (120 + row * 70) * u, y = cy - 6 * u + (row - 1) * 26 * u - Math.abs(Math.sin(game.time * 5 + i)) * 10 * u;
+    const sc = (1.5 * u) / sprRes;
+    ctx.save(); ctx.translate(x, y); ctx.scale(-side * sc, sc); ctx.rotate(Math.sin(game.time * 3 + i) * 0.1);
+    ctx.drawImage(s.c, -s.ax * sprRes, -s.ay * sprRes);
+    ctx.restore();
+  });
+  const rows = [['WASD / 方向键', '移动'], ['1 / 2 / 3 或鼠标', '升级时选卡（R 重抽）'], ['P / Esc', '暂停（查看属性与设置）'], ['M / V / N', '静音 / 屏幕震动 / 伤害数字'], ['R', '死亡或通关后重开']];
+  const pw = 440 * u, ph = (rows.length * 28 + 26) * u, px = cx - pw / 2, py = cy + 66 * u;
   panel(px, py, pw, ph, 14 * u);
   rows.forEach(([k, v], i) => {
     const y = py + (26 + i * 28) * u;
     text(k, cx - 16 * u, y, 16 * u, '#ffd166', 'right');
     text(v, cx + 16 * u, y, 16 * u, '#e9e2f5', 'left', 'normal');
   });
-  if (Math.sin(game.time * 5) > -0.3) textO('按 空格 开始', cx, py + ph + 44 * u, 28 * u, '#ffffff', OL, 6 * u);
+  if (Math.sin(game.time * 5) > -0.3) textO('按 空格 开始', cx, py + ph + 40 * u, 28 * u, '#ffffff', OL, 6 * u);
+  const b = game.best;
+  if (b) text(`最佳：${b.win ? '已通关 · ' : ''}存活 ${fmtTime(b.time)} · 击杀 ${b.kills} · Lv ${b.level}    累计 ${game.stats.runs} 局 / 通关 ${game.stats.wins} 次`, cx, view.h - 22 * u, 14 * u, 'rgba(240,230,255,0.6)', 'center', 'normal');
+}
+
+// 可点击按钮（本帧绘制，下一帧响应点击）
+function button(x, y, w, h, label, action, opt = {}) {
+  const m = input.mouse, hot = m.x >= x && m.x <= x + w && m.y >= y && m.y <= y + h;
+  rr(ctx, x, y, w, h, h / 2);
+  ctx.fillStyle = hot ? opt.hot || 'rgba(255,255,255,0.24)' : opt.bg || 'rgba(255,255,255,0.1)';
+  ctx.fill();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.stroke();
+  text(label, x + w / 2, y + h / 2 + 1, opt.size || 15 * view.ui, opt.color || '#ffffff');
+  game.btns.push({ x, y, w, h, action });
+}
+function fmtBig(n) { return n >= 1e4 ? (n / 1e4).toFixed(n >= 1e5 ? 0 : 1) + '万' : String(Math.round(n)); }
+function statLine(w) {
+  const s = wStats(w), d = w.def;
+  return Object.keys(d.labels).filter((k) => s[k] != null).slice(0, 3).map((k) => `${labelOf(d, k)} ${fmtStat(d, k, s[k])}`).join(' · ');
+}
+function togglesRow(cx, y) {
+  const u = view.ui, S = game.settings, bw = 132 * u, bh = 36 * u, gap = 10 * u;
+  const items = [
+    [`屏幕震动：${S.shake ? '开' : '关'}（V）`, () => { S.shake = !S.shake; saveSettings(); }],
+    [`伤害数字：${S.numbers ? '开' : '关'}（N）`, () => { S.numbers = !S.numbers; saveSettings(); }],
+    [`音效：${S.muted ? '关' : '开'}（M）`, () => { Sound.unlock(); Sound.setMuted(!S.muted); saveSettings(); }],
+  ];
+  const x0 = cx - (items.length * bw + (items.length - 1) * gap) / 2;
+  items.forEach(([l, a], i) => button(x0 + i * (bw + gap), y, bw, bh, l, a, { size: 13 * u }));
 }
 
 function renderPause() {
-  dim(0.6);
-  const u = view.ui, cx = view.w / 2, cy = view.h / 2;
-  textO('已暂停', cx, cy - 20 * u, 48 * u, '#fff7ec', OL, 8 * u);
-  text('按 P / Esc 继续', cx, cy + 34 * u, 18 * u, '#d9d0ea', 'center', 'normal');
+  dim(0.66);
+  const u = view.ui, cx = view.w / 2, p = state.player;
+  const pw = Math.min(900 * u, view.w - 24 * u), ph = Math.min(560 * u, view.h - 24 * u);
+  const px = cx - pw / 2, py = view.h / 2 - ph / 2;
+  panel(px, py, pw, ph, 18 * u, 'rgba(26,21,38,0.94)');
+  textO('暂停', cx, py + 38 * u, 34 * u, '#fff7ec', OL, 7 * u);
+  text(`${fmtTime(state.t)} · Lv ${state.level} · 击杀 ${state.kills}${state.gold ? ' · 金币 ' + state.gold : ''}`, cx, py + 72 * u, 15 * u, '#cbbfe0', 'center', 'normal');
+  const colW = (pw - 60 * u) / 2, lx = px + 24 * u, rx = lx + colW + 12 * u;
+  let y = py + 104 * u;
+  text('武器', lx, y, 17 * u, '#ffc94d', 'left');
+  text('造成伤害', lx + colW - 6 * u, y, 13 * u, '#9d92b3', 'right', 'normal');
+  y += 24 * u;
+  for (const w of p.weapons) {
+    rr(ctx, lx, y, colW, 44 * u, 10 * u); ctx.fillStyle = w.evo ? 'rgba(255,210,63,0.12)' : 'rgba(255,255,255,0.05)'; ctx.fill();
+    drawIcon(w.id, lx + 24 * u, y + 22 * u, 34 * u);
+    text(`${wName(w)}  ${w.evo ? '★进化' : 'Lv ' + w.lv}`, lx + 48 * u, y + 14 * u, 15 * u, w.evo ? '#ffe680' : '#ffffff', 'left');
+    text(statLine(w), lx + 48 * u, y + 32 * u, 12 * u, '#bfb3d6', 'left', 'normal');
+    text(fmtBig(w.dmg), lx + colW - 10 * u, y + 22 * u, 15 * u, '#ffd9a8', 'right');
+    y += 50 * u;
+  }
+  y = py + 104 * u;
+  text('道具', rx, y, 17 * u, '#63e6be', 'left');
+  y += 24 * u;
+  const pcw = (colW - 8 * u) / 2;
+  p.passives.forEach((ps, i) => {
+    const x = rx + (i % 2) * (pcw + 8 * u), yy = y + Math.floor(i / 2) * 50 * u;
+    rr(ctx, x, yy, pcw, 44 * u, 10 * u); ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fill();
+    drawIcon(ps.id, x + 22 * u, yy + 22 * u, 32 * u);
+    text(`${ps.def.name} Lv ${ps.lv}`, x + 44 * u, yy + 14 * u, 14 * u, '#ffffff', 'left');
+    text(`${ps.def.label} ${ps.def.total(ps.lv)}`, x + 44 * u, yy + 32 * u, 11.5 * u, '#bfb3d6', 'left', 'normal');
+  });
+  y += 3 * 50 * u + 8 * u;
+  text('属性', rx, y, 17 * u, '#8fd8ff', 'left');
+  y += 26 * u;
+  const stats = [
+    ['生命', `${Math.ceil(p.hp)} / ${p.maxHp}`], ['生命回复', `${fmtNum(p.regen)}/秒`],
+    ['移动速度', `${Math.round(CONFIG.player.speed * p.spdMul)}`], ['伤害加成', `+${Math.round((p.might - 1) * 100)}%`],
+    ['冷却缩减', `${Math.round((1 - p.cdMul) * 100)}%`], ['拾取范围', `${Math.round(CONFIG.player.pickup * p.pickupMul)}`],
+    ['固定减伤', `${p.armor}`], ['暴击率', `${Math.round(CONFIG.combat.critChance * 100)}% ×${CONFIG.combat.critMul}`],
+  ];
+  stats.forEach(([k, v], i) => {
+    const x = rx + (i % 2) * (pcw + 8 * u), yy = y + Math.floor(i / 2) * 24 * u;
+    text(k, x + 4 * u, yy, 14 * u, '#9d92b3', 'left', 'normal');
+    text(v, x + pcw - 6 * u, yy, 14 * u, '#ffffff', 'right');
+  });
+  // 底部按钮
+  const by = py + ph - 52 * u;
+  togglesRow(cx, by);
+  button(px + pw - 150 * u, by, 126 * u, 36 * u, game.confirmRestart > game.time ? '再按一次确认' : '重新开始（R）', () => askRestart(), { bg: 'rgba(255,94,87,0.25)', hot: 'rgba(255,94,87,0.5)', size: 13 * u });
+  button(px + 24 * u, by, 126 * u, 36 * u, '继续（P / Esc）', () => { game.phase = 'play'; }, { bg: 'rgba(126,99,255,0.6)', hot: 'rgba(126,99,255,0.9)', size: 13 * u });
+}
+function askRestart() {
+  if (game.confirmRestart > game.time) { game.confirmRestart = 0; startGame(); }
+  else game.confirmRestart = game.time + 2;
+}
+
+// 结算界面：存活时间、击杀、等级、各武器伤害排行
+function renderResults() {
+  const t = game.time - game.endAt, k = clamp(t / 0.5, 0, 1), u = view.ui, cx = view.w / 2, win = game.phase === 'win';
+  dim(0.78 * k);
+  if (t < 0.25) return;
+  const a = (d) => clamp((t - d) / 0.35, 0, 1);
+  const pw = Math.min(700 * u, view.w - 24 * u), ph = Math.min(600 * u, view.h - 20 * u);
+  const px = cx - pw / 2, py = view.h / 2 - ph / 2;
+  ctx.globalAlpha = a(0.25);
+  panel(px, py, pw, ph, 20 * u, 'rgba(26,21,38,0.95)', win ? 'rgba(255,210,63,0.5)' : 'rgba(255,255,255,0.12)');
+  const ts = easeOutBack(a(0.3));
+  ctx.save(); ctx.translate(cx, py + 50 * u); ctx.scale(ts, ts);
+  textO(win ? '厨房保卫成功！' : '你被食材淹没了……', 0, 0, 38 * u, win ? '#ffd23f' : '#ff8a7a', OL, 8 * u);
+  ctx.restore();
+  if (game.newBest) {
+    const s = 1 + Math.sin(game.time * 6) * 0.06;
+    ctx.save(); ctx.translate(cx, py + 88 * u); ctx.scale(s, s);
+    textO('★ 新纪录！★', 0, 0, 17 * u, '#ffe680', OL, 4 * u);
+    ctx.restore();
+  } else text(win ? '西瓜大王被你做成了果盘' : '别灰心，再来一局试试别的搭配', cx, py + 88 * u, 15 * u, '#bfb3d6', 'center', 'normal');
+  // 四个数据块
+  const tiles = [['存活时间', fmtTime(state.t)], ['击杀', String(state.kills)], ['等级', `Lv ${state.level}`], ['进化', `${state.evolutions || 0} 次`]];
+  const tw = (pw - 48 * u - 3 * 12 * u) / 4;
+  tiles.forEach(([l, v], i) => {
+    ctx.globalAlpha = a(0.4 + i * 0.08);
+    const x = px + 24 * u + i * (tw + 12 * u), y = py + 112 * u;
+    rr(ctx, x, y, tw, 70 * u, 12 * u); ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fill();
+    text(l, x + tw / 2, y + 20 * u, 13 * u, '#9d92b3', 'center', 'normal');
+    text(v, x + tw / 2, y + 47 * u, 24 * u, '#ffffff');
+  });
+  // 伤害排行
+  ctx.globalAlpha = a(0.7);
+  let y = py + 210 * u;
+  text('武器伤害排行', px + 24 * u, y, 16 * u, '#ffc94d', 'left');
+  y += 20 * u;
+  const R = game.ranking || [], max = R.length ? Math.max(1, R[0].dmg) : 1;
+  let total = 0;
+  for (const r of R) total += r.dmg;
+  R.forEach((r, i) => {
+    const ra = a(0.8 + i * 0.1);
+    ctx.globalAlpha = ra;
+    const yy = y + i * 40 * u, bx = px + 196 * u, bw = pw - 196 * u - 120 * u;
+    if (i === 0) { rr(ctx, px + 18 * u, yy + 2 * u, pw - 36 * u, 36 * u, 10 * u); ctx.fillStyle = 'rgba(255,210,63,0.08)'; ctx.fill(); }
+    text(String(i + 1), px + 34 * u, yy + 20 * u, 15 * u, i === 0 ? '#ffd23f' : '#9d92b3');
+    drawIcon(r.id, px + 62 * u, yy + 20 * u, 30 * u, ra);
+    text(r.name, px + 84 * u, yy + 20 * u, 15 * u, r.evo ? '#ffe680' : '#ffffff', 'left');
+    rr(ctx, bx, yy + 13 * u, bw, 14 * u, 7 * u); ctx.fillStyle = 'rgba(255,255,255,0.07)'; ctx.fill();
+    const f = (r.dmg / max) * easeOutCubic(clamp((t - 0.9 - i * 0.1) / 0.8, 0, 1));
+    if (f > 0.01) { rr(ctx, bx, yy + 13 * u, Math.max(14 * u, bw * f), 14 * u, 7 * u); ctx.fillStyle = lg(ctx, bx, 0, bx + bw, 0, i === 0 ? ['#ffb340', '#ffd23f'] : ['#7c6cff', '#45c6ff']); ctx.fill(); }
+    text(`${fmtBig(r.dmg)}  ${total ? Math.round((r.dmg / total) * 100) : 0}%`, px + pw - 26 * u, yy + 20 * u, 14 * u, '#ffd9a8', 'right');
+  });
+  // 最佳记录与按钮
+  ctx.globalAlpha = a(1.2);
+  const b = game.best;
+  if (b) text(`最佳：${b.win ? '已通关 · ' : ''}存活 ${fmtTime(b.time)} · 击杀 ${b.kills} · Lv ${b.level}    累计 ${game.stats.runs} 局 / 通关 ${game.stats.wins} 次`, cx, py + ph - 82 * u, 13 * u, '#9d92b3', 'center', 'normal');
+  const by = py + ph - 56 * u, bw2 = 170 * u;
+  button(cx - bw2 - 8 * u, by, bw2, 40 * u, '再来一局（R）', () => startGame(), { bg: 'rgba(126,99,255,0.7)', hot: 'rgba(126,99,255,1)', size: 15 * u });
+  button(cx + 8 * u, by, bw2, 40 * u, '回到标题（Esc）', () => { game.phase = 'title'; }, { size: 15 * u });
+  ctx.globalAlpha = 1;
 }
 
 // =====================================================================
@@ -2883,11 +3196,11 @@ function cardInfo(ch) {
     }
     case 'pnew': {
       const d = PASSIVES[ch.id];
-      return { tag: '新道具', color: '#4fd1c5', name: d.name, icon: ch.id, lv: 0, lines: [d.desc, `${d.label} ${d.total(1)}`] };
+      return { tag: '新道具', color: '#4fd1c5', name: d.name, icon: ch.id, lv: 0, lines: [d.desc], flavor: d.flavor };
     }
     case 'pup': {
       const ps = findPassive(ch.id), d = ps.def;
-      return { tag: '道具升级', color: '#63e6be', name: d.name, icon: ch.id, lv: ps.lv, lines: [d.desc, `${d.label}  ${d.total(ps.lv)} → ${d.total(ps.lv + 1)}`] };
+      return { tag: '道具升级', color: '#63e6be', name: d.name, icon: ch.id, lv: ps.lv, lines: [d.desc, `总计  ${d.total(ps.lv)} → ${d.total(ps.lv + 1)}`] };
     }
     case 'evo': {
       const ev = ch.ev;
@@ -2974,6 +3287,7 @@ function drawCard(info, x, y, w, h, idx, hot, appear) {
     }
     ly += 4 * u;
   }
+  if (info.flavor) for (const seg of wrapText(info.flavor, w - 40 * u, 13 * u)) { text(seg, icx, ly + 2 * u, 13 * u, '#a99cc4', 'center', 'normal'); ly += 18 * u; }
   ctx.restore();
 }
 
@@ -3011,18 +3325,6 @@ function renderLevelUp() {
   text('按 1 / 2 / 3、方向键 + 空格，或直接点击卡片', cx, by + bh + 26 * u, 14 * u, 'rgba(230,220,245,0.6)', 'center', 'normal');
 }
 
-function renderOver() {
-  const k = clamp((game.time - game.endAt) / 0.5, 0, 1);
-  dim(0.7 * k);
-  const u = view.ui, cx = view.w / 2, cy = view.h / 2;
-  ctx.globalAlpha = k;
-  if (game.phase === 'win') textO('厨房保卫成功！', cx, cy - 60 * u, 46 * u, '#ffd23f', OL, 8 * u);
-  else textO('你被食材淹没了……', cx, cy - 60 * u, 46 * u, '#ff8a7a', OL, 8 * u);
-  text(`存活 ${fmtTime(state.t)}  ·  击杀 ${state.kills}`, cx, cy + 6 * u, 22 * u, '#f3e9ff');
-  if (Math.sin(game.time * 5) > -0.3) textO('按 R 重新开始', cx, cy + 70 * u, 26 * u, '#ffffff', OL, 6 * u);
-  ctx.globalAlpha = 1;
-}
-
 function renderDebug() {
   setUI();
   const lines = [`FPS ${game.fps.toFixed(0)}`, `更新 ${game.upMs.toFixed(2)}ms  绘制 ${game.drawMs.toFixed(2)}ms`];
@@ -3040,18 +3342,28 @@ function renderDebug() {
 // =====================================================================
 function handleInput() {
   if (pressed(...KEYS.mute)) { Sound.setMuted(!game.settings.muted); saveSettings(); }
+  if (pressed('KeyV')) { game.settings.shake = !game.settings.shake; saveSettings(); }
+  if (pressed('KeyN')) { game.settings.numbers = !game.settings.numbers; saveSettings(); }
+  // 点击按钮
+  if (input.mouse.click && game.phase !== 'levelup') {
+    const m = input.mouse;
+    for (const b of game.btns) {
+      if (m.x >= b.x && m.x <= b.x + b.w && m.y >= b.y && m.y <= b.y + b.h) { Sound.play('select'); b.action(); input.mouse.click = false; return; }
+    }
+  }
   switch (game.phase) {
     case 'title':
       if (pressed(...KEYS.start) || input.mouse.click) startGame();
       break;
     case 'play':
-      if (pressed(...KEYS.pause)) game.phase = 'pause';
+      if (pressed(...KEYS.pause)) { game.phase = 'pause'; game.confirmRestart = 0; }
       if (game.debug && pressed('KeyL')) { state.xp = xpNeed(state.level); gainXp(0); }
       if (game.debug && pressed('KeyT')) state.t += 30;
       if (game.debug && pressed('KeyG')) game.god = !game.god;
       break;
     case 'pause':
-      if (pressed(...KEYS.pause) || input.mouse.click) game.phase = 'play';
+      if (pressed(...KEYS.pause)) game.phase = 'play';
+      if (pressed(...KEYS.restart)) askRestart();
       break;
     case 'levelup':
       handleLevelUpInput();
@@ -3059,6 +3371,7 @@ function handleInput() {
     case 'over':
     case 'win':
       if (pressed(...KEYS.restart) && game.time - game.endAt > 0.4) startGame();
+      else if (pressed('Escape') && game.time - game.endAt > 0.4) game.phase = 'title';
       break;
   }
 }
@@ -3073,12 +3386,13 @@ function step(rdt) {
 
 function render() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+  game.btns.length = 0;
   if (game.phase === 'title') { renderTitle(); return; }
   computeTransform();
   renderWorld();
   renderHUD();
   if (game.phase === 'pause') renderPause();
-  else if (game.phase === 'over' || game.phase === 'win') renderOver();
+  else if (game.phase === 'over' || game.phase === 'win') renderResults();
   else if (game.phase === 'levelup') renderLevelUp();
 }
 
