@@ -31,7 +31,7 @@ const CONFIG = {
   },
   combat: { critChance: 0.1, critMul: 2, hitFlash: 0.05, flashGap: 0.1 },
   audio: { volume: 0.5, heartbeat: 0.9 },
-  difficulty: { hpPerMin: 0.15 },   // 敌人血量每分钟 +15%
+  difficulty: { hpPerMin: 0.15, dmgPerMin: 0.06 },   // 敌人血量每分钟 +15%，伤害每分钟 +6%
   grid: { cell: 64 },
   spawn: {
     margin: 60,            // 在屏幕外多远处生成
@@ -39,8 +39,8 @@ const CONFIG = {
     opening: 6,            // 开局先刷几只，免得冷场
     // [时间(秒), 每秒刷怪数, 同屏上限]，相邻两点之间线性插值
     curve: [
-      [0, 0.9, 24], [30, 1.3, 40], [60, 1.8, 60], [120, 2.6, 90], [180, 5.2, 170],
-      [240, 6.2, 200], [300, 7.5, 240], [360, 9, 280], [390, 26, 400], [445, 26, 400], [450, 0, 0],
+      [0, 0.9, 24], [30, 1.3, 40], [60, 1.8, 60], [120, 2.6, 90], [180, 4.6, 170],
+      [240, 5.6, 200], [300, 7.5, 240], [360, 9, 280], [390, 26, 400], [445, 26, 400], [450, 0, 0],
     ],
   },
   xp: { base: 5, perLevel: 4 },        // 升级所需经验 = 5 + 等级 * 4
@@ -1456,7 +1456,7 @@ ZONE_DRAW.fire = (z, a) => {
   setWorld();
   ctx.strokeStyle = 'rgba(255,190,90,0.8)'; ctx.lineWidth = 1.4;
   for (let i = 0; i < 2; i++) {
-    const ph = (z.t * 1.6 + i * 0.5 + z.x * 0.01) % 1;
+    const ph = (((z.t * 1.6 + i * 0.5 + z.x * 0.01) % 1) + 1) % 1; // 坐标可能为负，取正余数
     ctx.beginPath(); ctx.arc(z.x + Math.cos(i * 2.4 + z.y) * z.r * 0.4, z.y + Math.sin(i * 2.4 + z.x) * z.r * 0.25, 1 + ph * 3.5, 0, TAU); ctx.stroke();
   }
   ctx.globalAlpha = 1;
@@ -1504,7 +1504,7 @@ function spawnEnemy(type, x, y) {
   const hpMul = 1 + CONFIG.difficulty.hpPerMin * (state.t / 60);
   e.dead = false; e.type = type; e.id = ++state.eid;
   e.x = x; e.y = y; e.vx = 0; e.vy = 0; e.kx = 0; e.ky = 0;
-  e.r = d.r; e.hp = e.maxHp = d.hp * hpMul; e.speed = d.speed * rand(0.92, 1.08); e.dmg = d.dmg; e.mass = d.mass;
+  e.r = d.r; e.hp = e.maxHp = d.hp * hpMul; e.speed = d.speed * rand(0.92, 1.08); e.dmg = d.dmg * (1 + CONFIG.difficulty.dmgPerMin * (state.t / 60)); e.mass = d.mass;
   e.flash = -1; e.stun = 0; e.slowT = 0; e.slow = 0; e.burnT = 0; e.burnDps = 0; e.burnAcc = 0; e.burnW = null;
   e.hitCd.fill(0);
   e.elite = false; e.boss = false; e.dash = false; e.scale = 1; e.t = 0; e.phase = Math.random() * TAU;
@@ -1523,7 +1523,7 @@ function spawnBoss(x, y, half, hp) {
   e.boss = true; e.half = half; e.speed = B.speed * (half ? B.halfSpeedMul : 1);
   e.scale = half ? B.halfScale : 1; e.r = CONFIG.enemies.boss.r * e.scale;
   if (hp) e.hp = e.maxHp = hp;
-  e.baseDmg = e.dmg * (half ? 0.8 : 1); e.dmg = e.baseDmg;
+  e.baseDmg = CONFIG.enemies.boss.dmg * (half ? 0.8 : 1); e.dmg = e.baseDmg;
   e.mode = half ? 3 : 0; e.modeT = half ? 0.6 : 2.5;
   return e;
 }
@@ -1587,7 +1587,7 @@ function newState() {
     bossPhase: false, bossMax: 1, bossShown: null, won: false, winT: 0,
     kills: 0, eid: 0, spawnAcc: 0, noSpawn: false, dying: 0,
     level: 1, xp: 0, gold: 0, pendingLevels: 0, rerolls: CONFIG.levelUp.rerolls,
-    pickCombo: 0, lastPick: -9, mergeT: 0,
+    pickCombo: 0, lastPick: -9, mergeT: 0, pendingChests: 0,
   };
 }
 
@@ -2285,7 +2285,7 @@ function potatoAI(e, dt, dx, dy, d, spd) {
       e.mode = 0; e.shootT = C.shootCd * rand(0.85, 1.15);
       const B = C.bullet, p = state.player, lead = (d / B.speed) * 0.3;
       const ang = Math.atan2(p.y + p.vy * lead - e.y, p.x + p.vx * lead - e.x);
-      spawnEBullet('potato', e.x, e.y + 4, Math.cos(ang) * B.speed, Math.sin(ang) * B.speed, B.r * (e.elite ? 1.4 : 1), B.dmg * (e.elite ? 1.5 : 1), B.life);
+      spawnEBullet('potato', e.x, e.y + 4, Math.cos(ang) * B.speed, Math.sin(ang) * B.speed, B.r * (e.elite ? 1.4 : 1), B.dmg * (e.elite ? 1.5 : 1) * (1 + CONFIG.difficulty.dmgPerMin * (state.t / 60)), B.life);
       e.kx -= Math.cos(ang) * 60; e.ky -= Math.sin(ang) * 60;
       Sound.play('spit');
     }
@@ -2346,6 +2346,7 @@ function updatePickups(dt) {
     }
   }
   state.pickups = state.pickups.filter((q) => !q.dead);
+  if (state.pendingChests > 0 && game.phase === 'play') { state.pendingChests--; openLevelUp('chest'); }
 }
 function collectPickup(q) {
   q.dead = true;
@@ -2363,7 +2364,7 @@ function collectPickup(q) {
     Sound.play('chest');
     game.flashAt = game.time;
     addRing(q.x, q.y, 120, 0.5, 'rgba(255,214,102,0.9)', 6);
-    openLevelUp('chest');
+    state.pendingChests++; // 排队打开，避免和同一帧的升级界面冲突而丢失奖励
   }
 }
 
@@ -2505,8 +2506,9 @@ function drawEnemies() {
     const charging = e.mode === 1 && e.type === 'potato' && ((e.modeT * 16) | 0) % 2 === 0;
     const v = e.flash > 0 ? art.w : e.burnT > 0 || charging ? art.b : e.slowT > 0 ? art.f : art.n;
     const ph = e.stun > 0 ? e.phase : e.t * ENEMY_ART[e.type].anim + e.phase;
-    const sq = Math.sin(ph) * 0.07, sc = e.scale;
-    drawSpr(v, e.x, e.y, sc * (1 + sq) * e.face, sc * (1 - sq), e.rot + Math.sin(ph * 0.5) * 0.07);
+    // 走路动画只用挤压 + 小跳（不旋转），软件渲染下也很省；小辣椒和滚动的 Boss 才真正旋转
+    const sq = Math.sin(ph) * 0.07, sc = e.scale, hop = Math.abs(Math.sin(ph * 0.5)) * 2 * sc;
+    drawSpr(v, e.x, e.y - hop, sc * (1 + sq) * e.face, sc * (1 - sq), e.rot);
   }
   // 眩晕：头顶转圈的小星星
   setWorld();
@@ -2862,7 +2864,7 @@ function renderHUD() {
   rr(ctx, bx - bw / 2 - 1.5, by - 1.5, bw + 3, bh + 3, 3); ctx.fillStyle = 'rgba(20,14,26,0.85)'; ctx.fill();
   const f = clamp(p.hp / p.maxHp, 0, 1);
   if (f > 0) { rr(ctx, bx - bw / 2, by, bw * f, bh, 2); ctx.fillStyle = f < CONFIG.player.lowHp ? '#ff4d5e' : '#5ee27a'; ctx.fill(); }
-  text('P 暂停 · M 静音', 16 * u, view.h - 16 * u, 13 * u, 'rgba(255,255,255,0.35)', 'left', 'normal');
+  text(`P 暂停 · M ${game.settings.muted ? '取消静音（已静音）' : '静音'}`, 16 * u, view.h - 16 * u, 13 * u, game.settings.muted ? 'rgba(255,170,170,0.6)' : 'rgba(255,255,255,0.35)', 'left', 'normal');
 }
 
 function renderTitle() {
@@ -3398,6 +3400,7 @@ function render() {
 
 let lastNow = performance.now();
 function frame(now) {
+  requestAnimationFrame(frame);
   let rdt = (now - lastNow) / 1000;
   lastNow = now;
   if (!(rdt > 0)) rdt = 0;
@@ -3415,7 +3418,6 @@ function frame(now) {
   game.drawMs = lerp(game.drawMs, t2 - t1, 0.1);
   input.hit = Object.create(null);
   input.mouse.click = false;
-  requestAnimationFrame(frame);
 }
 
 window.addEventListener('resize', resize);
