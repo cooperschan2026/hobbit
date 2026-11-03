@@ -29,6 +29,33 @@ const CONFIG = {
     invuln: 0.5,           // 受击无敌时间
     lowHp: 0.3,            // 低于 30% 血量进入危险状态
   },
+  combat: { critChance: 0.1, critMul: 2, hitFlash: 0.07 },
+  difficulty: { hpPerMin: 0.15 },   // 敌人血量每分钟 +15%
+  grid: { cell: 64 },
+  spawn: {
+    margin: 60,            // 在屏幕外多远处生成
+    leash: 260,            // 掉队超过屏幕外这么远，就挪到玩家前方
+    opening: 6,            // 开局先刷几只，免得冷场
+    // [时间(秒), 每秒刷怪数, 同屏上限]，相邻两点之间线性插值
+    curve: [
+      [0, 0.9, 24], [30, 1.3, 40], [60, 1.8, 60], [120, 2.6, 90], [180, 5.2, 170],
+      [240, 6.2, 200], [300, 7.5, 240], [360, 9, 280], [390, 26, 400], [445, 26, 400], [450, 0, 0],
+    ],
+  },
+  enemies: {
+    broccoli: { name: '西兰花', r: 15, hp: 18, speed: 48, dmg: 8, mass: 1.6, colors: ['#5fbf55', '#2f7d32', '#a5d67a'] },
+  },
+  weapons: {
+    spatula: {
+      levels: [
+        { dmg: 12, count: 1, pierce: 1, cd: 0.9, speed: 440, range: 520, kb: 90 },
+        { dmg: 12, count: 2, pierce: 1, cd: 0.9, speed: 440, range: 520, kb: 90 },
+        { dmg: 15, count: 2, pierce: 2, cd: 0.9, speed: 460, range: 540, kb: 100 },
+        { dmg: 15, count: 3, pierce: 2, cd: 0.85, speed: 460, range: 540, kb: 100 },
+        { dmg: 20, count: 3, pierce: 3, cd: 0.8, speed: 480, range: 560, kb: 110 },
+      ],
+    },
+  },
 };
 
 // =====================================================================
@@ -72,6 +99,51 @@ const store = {
 };
 
 const FONT = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC","Source Han Sans SC","WenQuanYi Zen Hei",sans-serif';
+
+// =====================================================================
+// 空间网格：散列网格做敌人碰撞查询（每帧重建，O(n)）
+// =====================================================================
+const GRID_BITS = 7, GRID_N = 1 << GRID_BITS, GRID_MASK = GRID_N - 1;
+const BIG_R = 26; // 半径大于它的（Boss）单独存放，每次查询都检查
+const grid = { head: new Int32Array(GRID_N * GRID_N), next: new Int32Array(1024), list: [], big: [] };
+const QR = [];    // 查询结果缓冲区（不要嵌套使用）
+function gridBuild(list) {
+  const inv = 1 / CONFIG.grid.cell;
+  grid.head.fill(-1);
+  if (grid.next.length < list.length) grid.next = new Int32Array(list.length * 2);
+  grid.list = list; grid.big.length = 0;
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i];
+    if (e.r > BIG_R) { grid.big.push(e); continue; }
+    const k = ((Math.floor(e.x * inv) & GRID_MASK) << GRID_BITS) | (Math.floor(e.y * inv) & GRID_MASK);
+    grid.next[i] = grid.head[k]; grid.head[k] = i;
+  }
+}
+// 找出与圆 (x, y, r) 相交的所有存活敌人，写入 QR，返回数量
+function query(x, y, r) {
+  const inv = 1 / CONFIG.grid.cell, pad = r + BIG_R;
+  const x0 = Math.floor((x - pad) * inv), x1 = Math.floor((x + pad) * inv);
+  const y0 = Math.floor((y - pad) * inv), y1 = Math.floor((y + pad) * inv);
+  const list = grid.list, head = grid.head, next = grid.next;
+  let n = 0;
+  for (let cx = x0; cx <= x1; cx++) {
+    const row = (cx & GRID_MASK) << GRID_BITS;
+    for (let cy = y0; cy <= y1; cy++) {
+      let i = head[row | (cy & GRID_MASK)];
+      while (i !== -1) {
+        const e = list[i];
+        if (!e.dead) { const dx = e.x - x, dy = e.y - y, rs = r + e.r; if (dx * dx + dy * dy < rs * rs) QR[n++] = e; }
+        i = next[i];
+      }
+    }
+  }
+  const big = grid.big;
+  for (let i = 0; i < big.length; i++) {
+    const e = big[i];
+    if (!e.dead) { const dx = e.x - x, dy = e.y - y, rs = r + e.r; if (dx * dx + dy * dy < rs * rs) QR[n++] = e; }
+  }
+  return n;
+}
 
 // =====================================================================
 // 画布与镜头
@@ -328,6 +400,56 @@ function buildFloor() {
   if (floorPattern.setTransform) floorPattern.setTransform(new DOMMatrix([1 / floorRes, 0, 0, 1 / floorRes, 0, 0]));
 }
 
+// ---- 表情小部件 ----
+function eye(c, x, y, r, look = 1) {
+  circ(c, x, y, r); fs(c, '#ffffff', 1.5);
+  circ(c, x + look * r * 0.32, y + r * 0.12, r * 0.58); c.fillStyle = OL; c.fill();
+  circ(c, x + look * r * 0.32 - r * 0.2, y - r * 0.12, r * 0.2); c.fillStyle = '#fff'; c.fill();
+}
+function brow(c, x1, y1, x2, y2, lw = 2) { c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.lineWidth = lw; c.strokeStyle = OL; c.stroke(); }
+function mouth(c, x, y, w, frown = true) {
+  c.beginPath();
+  if (frown) c.arc(x, y + w * 0.9, w, -Math.PI * 0.8, -Math.PI * 0.2); else c.arc(x, y - w * 0.3, w, 0.2, Math.PI - 0.2);
+  c.lineWidth = 1.6; c.strokeStyle = OL; c.stroke();
+}
+
+// ---- 敌人：西兰花 ----
+function drawBroccoli(c) {
+  c.beginPath(); c.moveTo(-6.5, 3); c.lineTo(6.5, 3); c.lineTo(5.5, 15.5); c.quadraticCurveTo(0, 18.5, -5.5, 15.5); c.closePath();
+  fs(c, lg(c, -6, 3, 6, 17, ['#d4ecb0', '#93c95a']));
+  blob(c, [[-10, -3, 8], [0, -9.5, 9.5], [10, -3, 8], [-6, 4, 7], [6, 4, 7], [0, -1, 9]], lg(c, -8, -19, 8, 11, ['#86d873', '#3c9a3e']));
+  c.fillStyle = 'rgba(25,85,40,0.35)';
+  for (const [x, y, r] of [[-12, -6, 2.4], [-5, -14, 2.6], [5, -15, 2.2], [12, -7, 2.4], [-9, 6, 2], [9, 6, 2], [0, -17, 1.8]]) { circ(c, x, y, r); c.fill(); }
+  c.fillStyle = 'rgba(255,255,255,0.28)';
+  for (const [x, y, r] of [[-7, -12, 2.6], [-1, -16, 2], [-12, -2, 1.6]]) { circ(c, x, y, r); c.fill(); }
+  eye(c, -3.5, -2, 3.6); eye(c, 5, -2, 3.6);
+  brow(c, -7.5, -7.5, -1, -5.2); brow(c, 9, -7.5, 2.5, -5.2);
+  mouth(c, 1, 5, 2.6, true);
+}
+
+// ---- 武器：飞锅铲 ----
+function drawSpatulaArt(c) {
+  rr(c, -16, -2.6, 16, 5.2, 2.6); fs(c, lg(c, 0, -3, 0, 3, ['#d9965a', '#8e5a2c']), 1.6);
+  c.fillStyle = OL; circ(c, -12.5, 0, 1); c.fill();
+  rr(c, -1.5, -1.6, 5, 3.2, 1); fs(c, '#9aa4b8', 1.2);
+  rr(c, 3, -7, 13, 14, 3.5); fs(c, lg(c, 3, -7, 16, 7, ['#ffffff', '#a9b3c7']), 1.6);
+  c.fillStyle = 'rgba(43,29,46,0.5)';
+  for (let k = 0; k < 3; k++) { rr(c, 6 + k * 3.2, -4.3, 1.5, 8.6, 0.75); c.fill(); }
+}
+
+// 敌人外观表：绘制函数 + 精灵尺寸 + 摇摆动画速度
+const ENEMY_ART = {
+  broccoli: { draw: drawBroccoli, w: 46, h: 46, anim: 7 },
+};
+function buildEnemySprites(type, art) {
+  const n = makeSprite(art.w, art.h, art.draw, art.ax ?? art.w / 2, art.ay ?? art.h / 2);
+  SPR.enemy[type] = {
+    n,
+    w: tintSprite(n, '#ffffff', 0.85),   // 受击闪白
+    f: tintSprite(n, '#8fd8ff', 0.45),   // 冰冻减速
+    b: tintSprite(n, '#ff6a1f', 0.38),   // 灼烧
+  };
+}
 function buildSprites() {
   const res = clamp(Math.ceil(view.zoom * view.dpr * 2) / 2, 1, 3);
   if (res === sprRes) return;
@@ -335,6 +457,9 @@ function buildSprites() {
   buildFloor();
   SPR.player = makeSprite(44, 60, drawChef, 22, 40);
   SPR.playerW = tintSprite(SPR.player, '#ffffff', 0.85);
+  SPR.enemy = {};
+  for (const type in ENEMY_ART) buildEnemySprites(type, ENEMY_ART[type]);
+  SPR.spatula = makeSprite(36, 18, drawSpatulaArt);
   // 屏幕暗角
   const vc = makeCanvas(256, 256), v = vc.getContext('2d');
   v.fillStyle = rg(v, 128, 128, 40, 182, ['rgba(8,6,16,0)', 'rgba(8,6,16,0.12)', 'rgba(8,6,16,0.6)']);
@@ -342,6 +467,95 @@ function buildSprites() {
   SPR.vignette = vc;
 }
 
+// =====================================================================
+// 武器数据：每把武器一条 { id, name, desc, labels, init, update }，数值在 CONFIG.weapons
+// =====================================================================
+const SRC = { spatula: 0, knife: 1, chili: 2, pepper: 3, pin: 4, frost: 5, pot: 6, fire: 7, vortex: 8, misc: 9 };
+const N_SRC = 10; // 每个伤害来源对同一敌人有独立的命中冷却
+const WEAPONS = {};
+const WEAPON_ORDER = [];
+function defWeapon(def) { WEAPONS[def.id] = def; WEAPON_ORDER.push(def.id); }
+function wStats(w) { const c = CONFIG.weapons[w.id]; return w.evo ? c.evo : c.levels[w.lv - 1]; }
+
+defWeapon({
+  id: 'spatula', name: '飞锅铲', color: '#ffd166',
+  desc: '自动朝最近的敌人扔出锅铲，可以穿透敌人。',
+  labels: { dmg: '伤害', count: '数量', pierce: '穿透', cd: '冷却' },
+  init(w) { w.cd = 0.2; w.queue = 0; w.qt = 0; w.targets = []; w.ti = 0; },
+  update(w, s, dt) {
+    const p = state.player;
+    if (w.queue > 0) {
+      w.qt -= dt;
+      if (w.qt <= 0) { w.qt = 0.08; w.queue--; throwSpatula(w, s); }
+    }
+    w.cd -= dt;
+    if (w.cd <= 0 && w.queue === 0) {
+      if (nearestEnemies(p.x, p.y, s.range, s.count, w.targets) === 0) { w.cd = 0; return; }
+      w.queue = s.count; w.qt = 0; w.ti = 0;
+      w.cd = s.cd * p.cdMul;
+    }
+  },
+});
+function throwSpatula(w, s) {
+  const p = state.player;
+  let t = w.targets.length ? w.targets[w.ti++ % w.targets.length] : null;
+  if (!t || t.dead) t = nearestEnemies(p.x, p.y, s.range * 1.2, 1, w.targets) ? w.targets[0] : null;
+  const ang = t ? Math.atan2(t.y - p.y, t.x - p.x) : Math.atan2(p.facey, p.facex);
+  const b = spawnBullet('spatula', w, p.x, p.y - 4, Math.cos(ang) * s.speed, Math.sin(ang) * s.speed);
+  b.r = 10; b.dmg = s.dmg; b.pierce = s.pierce + 1; b.life = 1.4; b.kb = s.kb;
+  b.spin = 17 * (Math.random() < 0.5 ? -1 : 1);
+  Sound.play('throw');
+}
+
+// =====================================================================
+// 子弹（对象池）
+// =====================================================================
+const bulletPool = new Pool(() => ({ hits: [] }));
+function spawnBullet(kind, w, x, y, vx, vy) {
+  const b = bulletPool.get();
+  b.dead = false; b.kind = kind; b.w = w; b.x = x; b.y = y; b.vx = vx; b.vy = vy;
+  b.r = 8; b.dmg = 0; b.pierce = 1; b.life = 1; b.t = 0; b.rot = Math.atan2(vy, vx); b.spin = 0; b.kb = 0;
+  b.hits.length = 0; b.a = 0; b.b = 0; b.c = 0; b.tx = 0; b.ty = 0; b.mode = 0;
+  state.bullets.push(b);
+  return b;
+}
+const BULLET_UPDATE = {
+  spatula(b, dt) {
+    b.x += b.vx * dt; b.y += b.vy * dt; b.rot += b.spin * dt;
+    if (b.t > b.life) { b.dead = true; return; }
+    const n = query(b.x, b.y, b.r);
+    for (let k = 0; k < n; k++) {
+      const e = QR[k];
+      if (b.hits.includes(e.id)) continue;
+      b.hits.push(e.id);
+      const sp = Math.hypot(b.vx, b.vy) || 1;
+      hurtEnemy(e, b.dmg, b.w, b.vx / sp, b.vy / sp, b.kb);
+      if (--b.pierce <= 0) { b.dead = true; break; }
+    }
+  },
+};
+const BULLET_DRAW = {
+  spatula(b) { drawSpr(SPR.spatula, b.x, b.y, 1, 1, b.rot); },
+};
+
+// =====================================================================
+// 敌人（对象池）
+// =====================================================================
+const enemyPool = new Pool(() => ({ hitCd: new Float32Array(N_SRC) }));
+function spawnEnemy(type, x, y) {
+  const d = CONFIG.enemies[type];
+  const e = enemyPool.get();
+  const hpMul = 1 + CONFIG.difficulty.hpPerMin * (state.t / 60);
+  e.dead = false; e.type = type; e.id = ++state.eid;
+  e.x = x; e.y = y; e.vx = 0; e.vy = 0; e.kx = 0; e.ky = 0;
+  e.r = d.r; e.hp = e.maxHp = d.hp * hpMul; e.speed = d.speed * rand(0.92, 1.08); e.dmg = d.dmg; e.mass = d.mass;
+  e.flash = 0; e.stun = 0; e.slowT = 0; e.slow = 0; e.burnT = 0; e.burnDps = 0; e.burnAcc = 0; e.burnW = null;
+  e.hitCd.fill(0);
+  e.elite = false; e.boss = false; e.dash = false; e.scale = 1; e.t = 0; e.phase = Math.random() * TAU;
+  e.face = x < state.player.x ? 1 : -1; e.rot = 0; e.mode = 0; e.modeT = 0; e.shootT = 0; e.dirx = 0; e.diry = 0;
+  state.enemies.push(e);
+  return e;
+}
 // =====================================================================
 // 游戏状态
 // =====================================================================
@@ -359,7 +573,9 @@ function makePlayer() {
   return {
     x: 0, y: 0, vx: 0, vy: 0, r: P.radius,
     hp: P.hp, maxHp: P.hp, invuln: 0,
-    facex: 1, facey: 0, flip: 1, walkT: 0, moving: false,
+    facex: 1, facey: 0, flip: 1, walkT: 0, moving: false, hurtT: 0,
+    might: 1, cdMul: 1, armor: 0, regen: 0, spdMul: 1, pickupMul: 1,
+    weapons: [], passives: [],
   };
 }
 
@@ -368,6 +584,8 @@ function newState() {
     t: 0,
     player: makePlayer(),
     slowmo: 0, slowmoScale: 1,
+    enemies: [], bullets: [],
+    kills: 0, eid: 0, spawnAcc: 0, noSpawn: false, dying: 0,
   };
 }
 
@@ -375,12 +593,132 @@ function startGame() {
   state = newState();
   cam.x = 0; cam.y = 0; cam.shake = 0;
   game.phase = 'play';
+  addWeapon('spatula');
+  for (let i = 0; i < CONFIG.spawn.opening; i++) spawnOne();
+}
+
+function addWeapon(id) {
+  const w = { id, def: WEAPONS[id], lv: 1, evo: false, dmg: 0, born: state.t };
+  w.def.init(w);
+  state.player.weapons.push(w);
+  return w;
+}
+
+function endRun(win) {
+  game.phase = win ? 'win' : 'over';
+  game.endAt = game.time;
 }
 
 function saveSettings() { store.set('kr_settings', game.settings); }
 
 function autoPause() { if (game.phase === 'play') game.phase = 'pause'; }
 
+// =====================================================================
+// 刷怪与时间线
+// =====================================================================
+function curveAt(curve, t) {
+  if (t <= curve[0][0]) return curve[0];
+  for (let i = 1; i < curve.length; i++) {
+    const b = curve[i];
+    if (t < b[0]) { const a = curve[i - 1], k = (t - a[0]) / (b[0] - a[0]); return [t, lerp(a[1], b[1], k), lerp(a[2], b[2], k)]; }
+  }
+  return curve[curve.length - 1];
+}
+// 屏幕外一圈（矩形边）上的随机点
+function edgePoint(margin) {
+  const p = state.player;
+  const hw = view.ww / 2 + margin, hh = view.wh / 2 + margin;
+  let r = Math.random() * (4 * hw + 4 * hh);
+  if (r < 2 * hw) return [p.x - hw + r, p.y - hh];
+  r -= 2 * hw; if (r < 2 * hw) return [p.x - hw + r, p.y + hh];
+  r -= 2 * hw; if (r < 2 * hh) return [p.x - hw, p.y - hh + r];
+  r -= 2 * hh; return [p.x + hw, p.y - hh + r];
+}
+// 从玩家出发沿某个角度，落在屏幕外边缘的点
+function edgePointDir(ang, margin) {
+  const hw = view.ww / 2 + margin, hh = view.wh / 2 + margin;
+  const c = Math.cos(ang), s = Math.sin(ang);
+  const t = Math.min(hw / (Math.abs(c) || 1e-6), hh / (Math.abs(s) || 1e-6));
+  return [state.player.x + c * t, state.player.y + s * t];
+}
+function pickEnemyType() { return 'broccoli'; }
+function spawnOne() { const [x, y] = edgePoint(CONFIG.spawn.margin); spawnEnemy(pickEnemyType(), x, y); }
+function updateSpawning(dt) {
+  if (state.noSpawn) return;
+  const c = curveAt(CONFIG.spawn.curve, state.t);
+  state.spawnAcc += c[1] * dt;
+  while (state.spawnAcc >= 1) {
+    state.spawnAcc -= 1;
+    if (state.enemies.length >= c[2]) { state.spawnAcc = 0; break; }
+    spawnOne();
+  }
+}
+
+// =====================================================================
+// 战斗
+// =====================================================================
+const NE_D = new Float64Array(32);
+// 找最近的 k 个敌人（k ≤ 32），结果写入 out，返回数量
+function nearestEnemies(x, y, range, k, out) {
+  out.length = 0;
+  const r2 = range * range, list = state.enemies;
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i];
+    if (e.dead) continue;
+    const dx = e.x - x, dy = e.y - y, d2 = dx * dx + dy * dy;
+    if (d2 > r2) continue;
+    let j;
+    if (out.length < k) { j = out.length; out.push(e); NE_D[j] = d2; }
+    else if (d2 < NE_D[k - 1]) { j = k - 1; out[j] = e; NE_D[j] = d2; }
+    else continue;
+    while (j > 0 && NE_D[j] < NE_D[j - 1]) {
+      const te = out[j]; out[j] = out[j - 1]; out[j - 1] = te;
+      const td = NE_D[j]; NE_D[j] = NE_D[j - 1]; NE_D[j - 1] = td;
+      j--;
+    }
+  }
+  return out.length;
+}
+
+// 对敌人造成伤害；w 为来源武器（统计伤害用），(dx,dy) 为击退方向
+function hurtEnemy(e, base, w, dx, dy, kb, noCrit) {
+  if (e.dead) return 0;
+  let dmg = base * state.player.might;
+  let crit = false;
+  if (!noCrit && Math.random() < CONFIG.combat.critChance) { dmg *= CONFIG.combat.critMul; crit = true; }
+  e.hp -= dmg;
+  e.flash = CONFIG.combat.hitFlash;
+  if (kb && !e.boss) { const k = kb / e.mass; e.kx += dx * k; e.ky += dy * k; }
+  if (w) w.dmg += dmg;
+  onEnemyHit(e, dmg, crit);
+  if (e.hp <= 0) killEnemy(e, w);
+  return dmg;
+}
+function onEnemyHit() { Sound.play('hit'); }
+
+function killEnemy(e) {
+  if (e.dead) return;
+  e.dead = true;
+  state.kills++;
+  Sound.play('kill');
+}
+
+function hurtPlayer(raw) {
+  const p = state.player;
+  if (p.invuln > 0 || p.hp <= 0 || game.god) return;
+  const dmg = Math.max(1, raw - p.armor);
+  p.hp -= dmg;
+  p.invuln = CONFIG.player.invuln;
+  p.hurtT = 0.35;
+  shake(0.32);
+  Sound.play('hurt');
+  if (p.hp <= 0) {
+    p.hp = 0;
+    state.dying = 0.55;
+    state.slowmo = 1.6; state.slowmoScale = 0.3;
+    shake(0.6);
+  }
+}
 // =====================================================================
 // 更新
 // =====================================================================
@@ -409,10 +747,100 @@ function updatePlayer(dt) {
   if (p.invuln > 0) p.invuln -= dt;
 }
 
+function updateWeapons(dt) {
+  const ws = state.player.weapons;
+  for (let i = 0; i < ws.length; i++) ws[i].def.update(ws[i], wStats(ws[i]), dt);
+}
+
+function updateBullets(dt) {
+  const list = state.bullets;
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i];
+    if (b.dead) continue;
+    b.t += dt;
+    BULLET_UPDATE[b.kind](b, dt);
+  }
+}
+
+function updateEnemies(dt) {
+  const p = state.player, list = state.enemies;
+  const leashX = view.ww / 2 + CONFIG.spawn.leash, leashY = view.wh / 2 + CONFIG.spawn.leash;
+  const kd = Math.exp(-dt * 9);
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i];
+    if (e.dead) continue;
+    e.t += dt;
+    if (e.flash > 0) e.flash -= dt;
+    const dx = p.x - e.x, dy = p.y - e.y;
+    const d = Math.hypot(dx, dy) || 1;
+    // 掉队太远：挪到玩家前方的屏幕外（保持压力）
+    if (!e.boss && (Math.abs(dx) > leashX || Math.abs(dy) > leashY)) {
+      if (e.dash) { e.dead = true; continue; }
+      const [nx, ny] = edgePointDir(Math.atan2(dy, dx) + rand(-0.7, 0.7), CONFIG.spawn.margin);
+      e.x = nx; e.y = ny; e.kx = e.ky = 0;
+      continue;
+    }
+    let spd = e.speed;
+    if (e.slowT > 0) { e.slowT -= dt; spd *= 1 - e.slow; }
+    let mvx = 0, mvy = 0;
+    if (e.stun > 0) e.stun -= dt;
+    else { mvx = (dx / d) * spd; mvy = (dy / d) * spd; }
+    e.vx = mvx; e.vy = mvy;
+    e.x += (mvx + e.kx) * dt; e.y += (mvy + e.ky) * dt;
+    e.kx *= kd; e.ky *= kd;
+    if (Math.abs(dx) > 3) e.face = dx > 0 ? 1 : -1;
+    // 接触伤害 + 不让敌人叠进主角身体里
+    const ex = e.x - p.x, ey = e.y - p.y, ed2 = ex * ex + ey * ey;
+    const cr = e.r + p.r * 0.75;
+    if (ed2 < cr * cr) {
+      hurtPlayer(e.dmg);
+      const minD = (e.r + p.r) * 0.82, ed = Math.sqrt(ed2) || 1;
+      if (ed < minD) { e.x = p.x + (ex / ed) * minD; e.y = p.y + (ey / ed) * minD; }
+    }
+  }
+  separate();
+}
+
+// 敌人之间柔性推开，避免叠成一坨
+function separate() {
+  const list = state.enemies;
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i];
+    if (e.dead || e.dash) continue;
+    const n = query(e.x, e.y, e.r * 0.9);
+    let px = 0, py = 0;
+    for (let k = 0; k < n; k++) {
+      const o = QR[k];
+      if (o === e || o.dash) continue;
+      let dx = e.x - o.x, dy = e.y - o.y, d2 = dx * dx + dy * dy;
+      const rs = (e.r + o.r) * 0.9;
+      if (d2 >= rs * rs) continue;
+      if (d2 < 0.01) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = dx * dx + dy * dy; }
+      const d = Math.sqrt(d2);
+      const push = ((rs - d) / d) * (o.mass / (e.mass + o.mass)) * 0.5;
+      px += dx * push; py += dy * push;
+    }
+    e.x += px; e.y += py;
+  }
+}
+
 function update(dt) {
-  state.t += dt;
-  updatePlayer(dt);
-  updateCamera(dt, state.player.x, state.player.y);
+  const p = state.player;
+  gridBuild(state.enemies);
+  if (state.dying > 0) {
+    state.dying -= dt;
+    if (state.dying <= 0) { endRun(false); return; }
+  } else {
+    state.t += dt;
+    updatePlayer(dt);
+    updateWeapons(dt);
+    updateSpawning(dt);
+  }
+  updateBullets(dt);
+  updateEnemies(dt);
+  updateCamera(dt, p.x, p.y);
+  compact(state.enemies, enemyPool);
+  compact(state.bullets, bulletPool);
 }
 
 // =====================================================================
@@ -431,8 +859,48 @@ function drawShadow(x, y, rx, ry, a = 0.28) {
   ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, TAU); ctx.fill();
 }
 
+const byY = (a, b) => a.y - b.y;
+function drawEnemies() {
+  const list = state.enemies, m = 90;
+  list.sort(byY);
+  // 影子一次性批量画
+  setWorld();
+  ctx.fillStyle = 'rgba(8,6,18,0.26)';
+  ctx.beginPath();
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i];
+    if (!onScreen(e.x, e.y, m)) continue;
+    const rx = e.r * e.scale * 0.95, ry = rx * 0.36, y = e.y + e.r * e.scale * 0.92;
+    ctx.moveTo(e.x + rx, y); ctx.ellipse(e.x, y, rx, ry, 0, 0, TAU);
+  }
+  ctx.fill();
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i];
+    if (!onScreen(e.x, e.y, m)) continue;
+    const art = SPR.enemy[e.type];
+    const v = e.flash > 0 ? art.w : e.burnT > 0 ? art.b : e.slowT > 0 ? art.f : art.n;
+    const ph = e.stun > 0 ? e.phase : e.t * ENEMY_ART[e.type].anim + e.phase;
+    const sq = Math.sin(ph) * 0.07, sc = e.scale;
+    drawSpr(v, e.x, e.y, sc * (1 + sq) * e.face, sc * (1 - sq), e.rot + Math.sin(ph * 0.5) * 0.07);
+  }
+}
+
+function drawBullets() {
+  const list = state.bullets;
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i];
+    if (onScreen(b.x, b.y, 60)) BULLET_DRAW[b.kind](b);
+  }
+}
+
 function drawPlayer() {
   const p = state.player;
+  if (p.hp <= 0) { // 倒地
+    drawShadow(p.x, p.y + 15, 15, 5);
+    const k = clamp(1 - state.dying / 0.55, 0, 1);
+    drawSpr(SPR.player, p.x, p.y + 6 * k, p.flip, 1, p.flip * k * Math.PI / 2);
+    return;
+  }
   drawShadow(p.x, p.y + 15, 13, 5);
   const bob = p.moving ? Math.abs(Math.sin(p.walkT * Math.PI)) : 0;
   const breathe = Math.sin(game.time * 3) * 0.02;
@@ -444,7 +912,9 @@ function drawPlayer() {
 
 function renderWorld() {
   drawFloor();
+  drawEnemies();
   drawPlayer();
+  drawBullets();
   // 暗角
   setUI();
   ctx.drawImage(SPR.vignette, 0, 0, view.w, view.h);
@@ -473,6 +943,7 @@ function renderHUD() {
   setUI();
   const u = view.ui;
   textO(fmtTime(state.t), view.w - 22 * u, 34 * u, 30 * u, '#fff7ec', OL, 5 * u, 'right');
+  textO(`击杀 ${state.kills}`, view.w - 22 * u, 66 * u, 17 * u, '#ffd9a8', OL, 4 * u, 'right');
   // 头顶小血条
   const p = state.player;
   const bx = toSX(p.x), by = toSY(p.y - 46);
@@ -531,9 +1002,21 @@ function renderPause() {
   text('按 P / Esc 继续', cx, cy + 34 * u, 18 * u, '#d9d0ea', 'center', 'normal');
 }
 
+function renderOver() {
+  const k = clamp((game.time - game.endAt) / 0.5, 0, 1);
+  dim(0.7 * k);
+  const u = view.ui, cx = view.w / 2, cy = view.h / 2;
+  ctx.globalAlpha = k;
+  textO('你被食材淹没了……', cx, cy - 60 * u, 46 * u, '#ff8a7a', OL, 8 * u);
+  text(`存活 ${fmtTime(state.t)}  ·  击杀 ${state.kills}`, cx, cy + 6 * u, 22 * u, '#f3e9ff');
+  if (Math.sin(game.time * 5) > -0.3) textO('按 R 重新开始', cx, cy + 70 * u, 26 * u, '#ffffff', OL, 6 * u);
+  ctx.globalAlpha = 1;
+}
+
 function renderDebug() {
   setUI();
   const lines = [`FPS ${game.fps.toFixed(0)}`, `更新 ${game.upMs.toFixed(2)}ms  绘制 ${game.drawMs.toFixed(2)}ms`];
+  if (state) lines.push(`敌人 ${state.enemies.length}  子弹 ${state.bullets.length}`);
   ctx.font = font(12, 'normal'); ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   const w = 230, h = lines.length * 16 + 10;
   ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(view.w / 2 - w / 2, view.h - h - 8, w, h);
@@ -556,6 +1039,10 @@ function handleInput() {
     case 'pause':
       if (pressed(...KEYS.pause) || input.mouse.click) game.phase = 'play';
       break;
+    case 'over':
+    case 'win':
+      if (pressed(...KEYS.restart) && game.time - game.endAt > 0.4) startGame();
+      break;
   }
 }
 
@@ -574,6 +1061,7 @@ function render() {
   renderWorld();
   renderHUD();
   if (game.phase === 'pause') renderPause();
+  else if (game.phase === 'over') renderOver();
 }
 
 let lastNow = performance.now();
