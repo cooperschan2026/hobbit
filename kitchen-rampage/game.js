@@ -16,7 +16,7 @@ const CONFIG = {
     worldW: 1100,          // 横向至少能看到的世界宽度
     worldH: 720,           // 纵向至少能看到的世界高度
     maxDpr: 2,
-    maxPixels: 6.5e6,      // 画布像素上限（防止 4K 屏卡顿）
+    maxPixels: 4.5e6,      // 画布像素上限（高分屏上限制填充量，防止核显卡顿）
   },
   camera: { follow: 9, shakeMax: 13, shakeDecay: 2.4 },
   floor: { tile: 64, period: 8 },
