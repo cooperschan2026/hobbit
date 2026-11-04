@@ -6,8 +6,8 @@
 const DATA = {
   enemies: {
     // hp 生命，dmg 伤害，speed 速度，shadow 是否影子类（暗处 +50%，怕光爆），wick 掉落灯芯范围
-    shade: { name: '小影', hp: 6, dmg: 2, speed: 30, shadow: true, wick: [1, 2], box: [5, 4], tell: 0.55, lunge: 135, lungeTime: 0.32 },
-    hound: { name: '影犬', hp: 5, dmg: 2, speed: 76, shadow: true, wick: [1, 2], box: [5, 3], tell: 0.4, lunge: 170, lungeTime: 0.25 },
+    shade: { name: '小影', hp: 7, dmg: 2, speed: 33, shadow: true, wick: [1, 2], box: [5, 4], tell: 0.5, lunge: 142, lungeTime: 0.32, rest: 0.55 },
+    hound: { name: '影犬', hp: 6, dmg: 2, speed: 78, shadow: true, wick: [1, 2], box: [5, 3], tell: 0.4, lunge: 172, lungeTime: 0.25 },
     ghost: { name: '灯笼鬼', hp: 6, dmg: 1, speed: 36, shadow: true, wick: [2, 3], box: [5, 5], steal: 15, fly: true },
     spike: { name: '竹刺', hp: 8, dmg: 3, speed: 0, wick: [1, 2], box: [6, 4], range: 30, tell: 0.45 },
     frog: { name: '冰蛙', hp: 8, dmg: 2, speed: 0, wick: [1, 3], box: [6, 4], tell: 0.5, jump: 0.55, slow: 1.5 },
@@ -20,9 +20,9 @@ const DATA = {
   bosses: {
     ke: { name: '竹中客', hp: 60, dmg: 3 },
     carp: { name: '溺钟', hp: 90, dmg: 4 },
-    kiln: { name: '窑神', hp: 80, dmg: 4, plate: 7 },
+    kiln: { name: '窑神', hp: 110, dmg: 4, plate: 7 },
     zhu: { name: '师父·烛', hp: 150, dmg: 3 },
-    night: { name: '长夜', hp: 150, dmg: 4 },
+    night: { name: '长夜', hp: 170, dmg: 4 },
   },
   bossWicks: 40,
   items: {

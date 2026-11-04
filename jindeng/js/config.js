@@ -62,6 +62,6 @@ const CFG = {
     lighthouse: 120, brazier: 62, firefly: 30, moon: 38, lava: 26, fire: 34, lamp: 22,
     ambient: { home: 0.55, tea: 0.5, town: 0.86, bamboo: 0.9, lake: 0.82, kiln: 0.78, summit: 0.9 },
   },
-  hint: { time: 6 },
+  hint: { time: 5, ttl: 8 }, // ttl：提示排队超过这么久（不算对话时间）就作废
   debug: /[?&]debug=1/.test(location.search),
 };

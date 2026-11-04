@@ -44,18 +44,21 @@ function btn(label, x, y, w, h, opt = {}) {
 // 剧情脚本解释器
 // =====================================================================
 G.scriptQ = [];
-function runScript(src) {
+function runScript(src, cont) {
   const cmds = typeof src === 'string' ? STORY[src] : src;
   if (!cmds) { console.warn('没有这段剧情', src); return; }
-  if (G.script) { G.scriptQ.push(cmds); return; }
+  if (G.script) { G.scriptQ.push({ cmds, room: G.room && G.room.id }); return; }
+  if (!cont) dropHints(); // 对话开始：之前排着的提示都过期了
   G.script = { cmds, pc: 0, wait: 0, chain: null, block: null };
   stepScript();
 }
 function endScript() {
   const chain = G.script && G.script.chain;
   G.script = null; G.ui.dlg = null; G.barsTo = 0;
-  if (chain) runScript(chain);
-  else if (G.scriptQ.length) runScript(G.scriptQ.shift());
+  if (chain) { runScript(chain, true); return; }
+  // 排队的剧情只在原来的房间里放
+  G.scriptQ = G.scriptQ.filter((q) => !G.room || q.room === G.room.id);
+  if (G.scriptQ.length) runScript(G.scriptQ.shift().cmds, true);
 }
 function labelAt(cmds, name) { return cmds.findIndex((c) => c[0] === 'label' && c[1] === name); }
 function speakerName(who) {
@@ -396,18 +399,21 @@ function drawHUD() {
   ctx.drawImage(ART.icon.soup, 6, by - 2); txt(`${S.soup}/${S.soupMax}`, 20, by + 6, 8, '#f4efe6', 'left', true);
   txt('F', 44, by + 6, 6.5, '#7a7090');
   ctx.drawImage(ART.icon.wick, 56, by - 2); txt(`${S.wicks}`, 70, by + 6, 8, '#fff1b0', 'left', true);
-  // Boss 血条
+  // Boss 血条：放在屏幕上方正中（左边是心和灯油，右边是副能力），不和底部的暖汤、对话框打架
   const B = G.ui.boss;
   if (B && B.e && !B.e.dead) {
-    const w = 260, x = (VW - w) / 2, y = VH - 20, e = B.e;
+    const w = 210, x = Math.round((VW - w) / 2), y = 15, e = B.e, f = clamp(e.hp / e.maxHp, 0, 1);
+    B.shown = Math.max(f, (B.shown == null ? f : B.shown) - 0.25 / 60); // 掉血时有一段白色残影
     txtO(B.name, VW / 2, y - 3, 8.5, '#ffb3a8', 'center');
     ctx.fillStyle = '#120e1a'; ctx.fillRect(x - 1, y - 1, w + 2, 7);
-    ctx.fillStyle = '#7e2a2e'; ctx.fillRect(x, y, w, 5);
-    ctx.fillStyle = '#e86a4f'; ctx.fillRect(x, y, Math.round(w * clamp(e.hp / e.maxHp, 0, 1)), 5);
-    ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.fillRect(x, y, Math.round(w * clamp(e.hp / e.maxHp, 0, 1)), 1);
-    if (e.kind === 'zhu') { ctx.fillStyle = '#f4efe6'; ctx.fillRect(x + Math.round(w / 3), y - 1, 1, 7); ctx.fillRect(x + Math.round(w * 2 / 3), y - 1, 1, 7); }
-    else { ctx.fillStyle = '#f4efe6'; ctx.fillRect(x + w / 2, y - 1, 1, 7); }
-    if (e.kind === 'kiln' && !BOSS.kiln.exposed(e)) txt(`瓷甲 ${e.plates.filter((h) => h > 0).length} / 4`, x + w + 4, y + 5, 7, '#bfe9ff');
+    ctx.fillStyle = '#5a1f24'; ctx.fillRect(x, y, w, 5);
+    ctx.fillStyle = '#f4efe6'; ctx.fillRect(x, y, Math.round(w * B.shown), 5);
+    ctx.fillStyle = '#e86a4f'; ctx.fillRect(x, y, Math.round(w * f), 5);
+    ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.fillRect(x, y, Math.round(w * f), 1);
+    ctx.fillStyle = '#f4efe6';
+    if (e.kind === 'zhu') { ctx.fillRect(x + Math.round(w / 3), y - 1, 1, 7); ctx.fillRect(x + Math.round(w * 2 / 3), y - 1, 1, 7); }
+    else ctx.fillRect(x + Math.round(w / 2), y - 1, 1, 7);
+    if (BOSS[e.kind].hud) BOSS[e.kind].hud(e, x, y + 9, w);
   }
   // Boss 台词
   const bl = G.ui.bossLine;
@@ -449,14 +455,14 @@ function drawOverlays(dt) {
     else { ctx.globalAlpha = a; if (b.big) { panel(70, 90, VW - 140, 46, 'rgba(30,22,10,0.92)', '#e7b53d'); txtO(b.title, VW / 2, 110, 12, '#ffd166', 'center'); txt(b.sub, VW / 2, 126, 8, '#f4efe6', 'center'); } else { txtO(b.title, VW / 2, 70, 16, '#f4efe6', 'center'); txt('—— ' + b.sub + ' ——', VW / 2, 84, 8, '#d6cfe0', 'center'); } ctx.globalAlpha = 1; }
   }
   // 提示
-  if (G.ui.hint && !G.ui.menu && !G.ui.dlg && !G.ui.letter) {
-    G.ui.hintT -= dt;
-    const a = Math.min(1, G.ui.hintT * 2, (CFG.hint.time - G.ui.hintT) * 4);
-    if (G.ui.hintT <= 0) G.ui.hint = null;
-    else { ctx.globalAlpha = a; ctx.font = `8.5px ${FONT}`; const w = ctx.measureText(G.ui.hint).width + 20; const y = G.ui.dlg ? 120 : VH - 46; panel(VW / 2 - w / 2, y, w, 16, 'rgba(18,14,26,0.92)', '#7ac0e0'); txt(G.ui.hint, VW / 2, y + 8.5, 8.5, '#dff4ff', 'center', false, 'middle'); ctx.globalAlpha = 1; }
+  const H = G.ui.hint;
+  if (H && !hintBusy()) {
+    const a = clamp(Math.min(H.t * 2, H.shown * 4), 0, 1);
+    ctx.globalAlpha = a; ctx.font = `8.5px ${FONT}`; const w = ctx.measureText(H.text).width + 20, y = VH - 46;
+    panel(VW / 2 - w / 2, y, w, 16, 'rgba(18,14,26,0.92)', '#7ac0e0'); txt(H.text, VW / 2, y + 8.5, 8.5, '#dff4ff', 'center', false, 'middle'); ctx.globalAlpha = 1;
   }
   // 小通知
-  G.ui.toasts.forEach((t, i) => { t.t += dt; const a = Math.min(1, t.t * 4, (3 - t.t) * 2); if (a > 0) { ctx.globalAlpha = a; ctx.font = `bold 8px ${FONT}`; const w = ctx.measureText(t.str).width + 14; panel(VW / 2 - w / 2, 20 + i * 15, w, 13, 'rgba(18,14,26,0.9)', '#e7b53d'); txt(t.str, VW / 2, 26.5 + i * 15, 8, '#fff1b0', 'center', true, 'middle'); ctx.globalAlpha = 1; } });
+  G.ui.toasts.forEach((t, i) => { t.t += dt; const a = Math.min(1, t.t * 4, (3 - t.t) * 2); if (a > 0) { ctx.globalAlpha = a; ctx.font = `bold 8px ${FONT}`; const w = ctx.measureText(t.str).width + 14; const ty = (G.ui.boss ? 36 : 20) + i * 15; panel(VW / 2 - w / 2, ty, w, 13, 'rgba(18,14,26,0.9)', '#e7b53d'); txt(t.str, VW / 2, ty + 6.5, 8, '#fff1b0', 'center', true, 'middle'); ctx.globalAlpha = 1; } });
   G.ui.toasts = G.ui.toasts.filter((t) => t.t < 3);
 }
 function drawCrosshair() {
@@ -499,6 +505,7 @@ function updateInteract() {
     else EK[best.e.k].interact(best.e);
   }
   if (best && !G.S.hints.interact) hint('interact');
+  if (best && best.e && best.e.k === 'lh' && G.S.lit[best.e.id] && !G.S.hints.lighthouse) hint('lighthouse');
 }
 
 // =====================================================================

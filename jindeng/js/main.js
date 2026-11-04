@@ -29,18 +29,15 @@ function continueGame() {
   fadeTo(0, 0.8);
 }
 function resetRun() {
-  G.playStart = G.rt; G.script = null; G.scriptQ = []; G.ui.dlg = null; G.ui.menu = null; G.ui.letter = null; G.ui.boss = null; G.ui.toasts = []; G.ui.hint = null; G.hintQ = [];
+  G.playStart = G.rt; G.script = null; G.scriptQ = []; G.ui.dlg = null; G.ui.menu = null; G.ui.letter = null; G.ui.boss = null; G.ui.toasts = []; G.ui.hint = null; G.hintQ = []; G.settle = null; G.paused = false; G.ui.bossLine = null; G.ui.banner = null;
   G.bossFight = null; G.lockExits = false; G.camFocus = null; G.bars = 0; G.barsTo = 0; G.projs = []; G.parts = []; G.tele = []; G.flashes = []; G.hitstop = 0; G.slowT = 0; G.room = null; G.fade.v = 1;
 }
 function toTitle() { G.scene = 'title'; G.S = null; G.P = null; G.room = null; G.script = null; G.ui.menu = null; G.ui.dlg = null; TITLE.confirm = false; Snd.music('title'); fadeTo(0, 0.6); }
 
-// 提示排队显示
-const _hint = hint;
-hint = function (id) { if (!G.S || G.S.hints[id] || !HINTS[id]) return; if (G.ui.hint) { if (!G.hintQ.includes(id)) G.hintQ.push(id); return; } _hint(id); };
 
 // ---------------- 游戏逻辑一步 ----------------
 function updateGame(dt) {
-  if (!G.ui.hint && G.hintQ.length) hint(G.hintQ.shift());
+  updateHints(dt);
   if (G.ui.menu) { updateMenu(dt); return; }
   if (keyHit('Escape') && !G.script && !G.trans && !G.P.dead) { openMenu('pause'); return; }
   const hadScript = !!G.script;
@@ -59,6 +56,8 @@ function updateGame(dt) {
   R.ents = R.ents.filter((e) => !e.dead || e.k === 'jar');
   for (const e of R.ents) if (e.dead && e.k === 'jar') e.dead = false;
   updateProjs(sdt); updateTele(sdt); updateFx(sdt); updateFlashes(sdt); updateAmbient(sdt);
+  if (G.room === R) updateLater(sdt);
+  updateSettle(dt);
   if (G.room === R) { updateInteract(); updateTriggers(); }
   updateCam(sdt);
   // 滚轮切换副能力
@@ -66,6 +65,11 @@ function updateGame(dt) {
   if (G.ui.abilSwap > 0) G.ui.abilSwap -= dt;
   // 第一次看到敌人出手前的预兆，提示翻滚
   if (!G.S.hints.roll && R.ents.some((e) => e.k === 'enemy' && e.st === 'tell' && dist(e.x, e.y, G.P.x, G.P.y) < 70)) hint('roll');
+  // 被打断而没看到的操作提示，条件还满足时补上
+  if (!G.script && !G.bossFight && !G.settle) {
+    if (!G.S.hints.menu && G.S.flags.lit_town) hint('menu', { delay: 1 });
+    if (!G.S.hints.wheel && abilList().length > 1) hint('wheel', { delay: 2 });
+  }
 }
 // 房间里的剧情触发区
 function updateTriggers() {
@@ -152,8 +156,14 @@ function frame(now) {
   }
   const click = IN.lhit;
   let stepped = false;
+  // 失焦暂停：点击或 Esc 继续，这次输入不传给游戏
+  if (G.paused) {
+    acc = 0;
+    if (G.scene !== 'game') G.paused = false;
+    else if (IN.lhit || keyHit('Escape')) { G.paused = false; Snd.unlock(); clearInput(); IN.lmb = false; for (const k in IN.down) IN.down[k] = false; G.lockT = 0.15; }
+  }
   try {
-    if (G.scene === 'game') {
+    if (G.scene === 'game' && !G.paused) {
       acc += dt;
       let n = 0;
       while (acc >= STEP && n < 5) { updateGame(STEP); acc -= STEP; n++; stepped = true; clearEdge(); }
@@ -167,7 +177,7 @@ function frame(now) {
   ctx.save(); ctx.beginPath(); ctx.rect(0, 0, VW, VH); ctx.clip();
   try {
     if (G.scene === 'title') drawTitle(dt);
-    else if (G.scene === 'game' && G.room) drawGame(dt);
+    else if (G.scene === 'game' && G.room) { drawGame(G.paused ? 0 : dt); if (G.paused) drawPaused(); }
     else if (G.scene === 'ending') drawEnding(dt);
   } catch (err) { console.error(err); }
   if (G.scene === 'title' && G.ui.menu) updateMenu(dt);
@@ -175,7 +185,13 @@ function frame(now) {
   if (G.scene !== 'ending') drawCrosshair();
   if (G.debug) drawDebugInfo();
   ctx.restore();
-  if (G.scene !== 'game' || stepped) { clearInput(); IN.moved = false; }
+  if (G.scene !== 'game' || stepped || G.paused) { clearInput(); IN.moved = false; }
+}
+function drawPaused() {
+  ctx.fillStyle = 'rgba(8,6,14,0.6)'; ctx.fillRect(0, 0, VW, VH);
+  panel(VW / 2 - 90, VH / 2 - 24, 180, 44, 'rgba(18,14,26,0.95)', '#e7b53d');
+  txtO('已暂停', VW / 2, VH / 2 - 6, 12, '#ffd166', 'center');
+  txt('点击画面或按 Esc 继续', VW / 2, VH / 2 + 11, 8, '#d6cfe0', 'center');
 }
 // 一帧里多个逻辑步时，按键边沿只给第一步用
 function clearEdge() { IN.hit = Object.create(null); IN.lhit = false; IN.lup = false; IN.rhit = false; IN.wheel = 0; }

@@ -38,7 +38,10 @@ window.addEventListener('keydown', (e) => {
   Snd.unlock();
 });
 window.addEventListener('keyup', (e) => { IN.down[e.code] = false; });
-window.addEventListener('blur', () => { for (const k in IN.down) IN.down[k] = false; IN.lmb = false; if (G.scene === 'game' && !G.ui.menu && !G.script) openMenu('pause'); });
+// 窗口失焦：只把游戏停住（不弹菜单），回来后点一下或按 Esc 继续
+function autoPause() { for (const k in IN.down) IN.down[k] = false; IN.lmb = false; if (G.scene === 'game' && !G.ui.menu && !G.paused) { G.paused = true; if (Snd.ctx && Snd.ctx.state === 'running') Snd.ctx.suspend(); } }
+window.addEventListener('blur', autoPause);
+document.addEventListener('visibilitychange', () => { if (document.hidden) autoPause(); });
 function mousePos(e) { IN.mx = (e.clientX * V.dpr - V.ox) / V.S; IN.my = (e.clientY * V.dpr - V.oy) / V.S; IN.moved = true; }
 cv.addEventListener('mousemove', mousePos);
 cv.addEventListener('mousedown', (e) => { mousePos(e); cv.focus(); Snd.unlock(); if (e.button === 0) { IN.lmb = true; IN.lhit = true; } else if (e.button === 2) IN.rhit = true; e.preventDefault(); });
@@ -56,7 +59,7 @@ const G = {
   parts: [], projs: [], texts: [],
   t: 0, rt: 0, hitstop: 0, slowT: 0, slowScale: 1, shakeV: 0,
   fade: { v: 1, to: 0, speed: 3, cb: null }, trans: false,
-  ui: { menu: null, hint: null, hintT: 0, toasts: [], banner: null, prompt: null, dlg: null, boss: null, letter: null },
+  ui: { menu: null, hint: null, toasts: [], banner: null, prompt: null, dlg: null, boss: null, letter: null },
   script: null, bars: 0, barsTo: 0, lockExits: false, bossFight: null, camFocus: null,
   god: false, debug: CFG.debug, fps: 60, playStart: 0,
   set: Object.assign({ master: 0.8, music: 0.55, sfx: 0.8, shake: true, textSpeed: 1 }, loadJSON(SET_KEY) || {}),
@@ -112,7 +115,7 @@ const CHAR_TILE = { '#': TL.WALL, '.': TL.FLOOR, ',': TL.FLOOR2, ':': TL.PATH, '
 function gateClosed(R) {
   const g = R.def.gate;
   if (!g) return false;
-  if (g === 'boss') return !!G.bossFight;
+  if (g === 'boss') return !!G.bossFight || !!G.settle;
   return !G.S.flags[g.flag];
 }
 function tileSolid(R, c) { return c === TL.WALL || c === TL.DECO || c === TL.VINE || c === TL.HOUSE || (c === TL.GATE && gateClosed(R)); }
@@ -353,7 +356,7 @@ function tryPushJar(dirx, diry) {
   blockTile(R, tx, ty, -1); blockTile(R, nx, ny, 1);
   jar.fx = jar.x; jar.fy = jar.y; jar.tx = nx; jar.ty = ny; jar.x = nx * TS + 8; jar.y = ny * TS + 8; jar.px = jar.fx; jar.py = jar.fy; jar.mt = 0;
   Snd.play('jar'); p.pushCd = 0.2;
-  if (c === TL.VENT && !R.def.bossVents) { G.S.vents[`${R.id}:${nx},${ny}`] = true; setTimeout(() => { if (G.room === R) coolVent(R, nx, ny); }, 200); }
+  if (c === TL.VENT && !R.def.bossVents) { G.S.vents[`${R.id}:${nx},${ny}`] = true; later(0.2, () => coolVent(R, nx, ny)); }
   if (R.def.bossVents && c === TL.LAVA) { R.t[ny * R.w + nx] = TL.COOL; R.dirty = true; }
 }
 EK.bell = {
@@ -366,7 +369,7 @@ function ringBell(e) {
   if (e.ring > 0) return;
   e.ring = 0.8; const R = G.room;
   R.bell = 1 - R.bell; R.dirty = true;
-  Snd.play('bell'); setTimeout(() => Snd.play('iceCrack'), 250); shake(0.15);
+  Snd.play('bell'); later(0.25, () => Snd.play('iceCrack')); shake(0.15);
   for (const i of R.anim) { const c = R.t[i]; if (c === TL.BW || c === TL.BI) burst((i % R.w) * TS + 8, ((i / R.w) | 0) * TS + 8, 2, ['#e4f8fc', '#a9dff0'], 40, 0.6, 1, 20); }
   hint('bell');
 }
@@ -409,7 +412,7 @@ EK.npc = {
     ctx.globalAlpha = 1;
   },
   update(e, dt) {
-    if (e.walkTo) { const [tx, ty] = e.walkTo, d = dist(e.x, e.y, tx, ty); if (d < 1.5) { e.walkTo = null; e.walking = false; } else { const s = Math.min(d, 50 * dt); e.x += ((tx - e.x) / d) * s; e.y += ((ty - e.y) / d) * s; e.walking = true; e.dir = tx > e.x ? 1 : -1; } }
+    if (e.walkTo) { const [tx, ty] = e.walkTo, d = dist(e.x, e.y, tx, ty); if (d < 1.5) { e.walkTo = null; e.walking = false; } else { const s = Math.min(d, (e.walkSpeed || 50) * dt); e.x += ((tx - e.x) / d) * s; e.y += ((ty - e.y) / d) * s; e.walking = true; e.dir = tx > e.x ? 1 : -1; } }
     if (e.id === 'qiS' && Math.random() < 0.08) part(e.x + rand(-4, 4), e.y - 4, 0, -12, 0.8, '#463a62', 1);
   },
   label(e) { return '对话'; },
@@ -482,7 +485,7 @@ EK.loot = {
     e.t += dt; const p = G.P; if (!p) return;
     e.vx *= 0.92; e.vy *= 0.92; e.x += e.vx * dt; e.y += e.vy * dt;
     const d = dist(p.x, p.y, e.x, e.y);
-    if (e.t > 0.4 && d < 44) { const s = (1 - d / 44) * 260 * dt + 40 * dt; e.x += ((p.x - e.x) / d) * s; e.y += ((p.y - 4 - e.y) / d) * s; }
+    if (e.t > 0.4 && (d < 44 || e.magnet)) { const s = Math.max((1 - d / 44) * 260, e.magnet ? 200 : 0) * dt + 40 * dt; e.x += ((p.x - e.x) / d) * s; e.y += ((p.y - 4 - e.y) / d) * s; }
     if (d < 8) { e.dead = true; if (e.item === 'wick') { G.S.wicks += e.n; Snd.play('pickup'); } else { G.S.oil = Math.min(G.S.oilMax, G.S.oil + CFG.oil.bottle); Snd.play('oil'); ftext(p.x, p.y - 20, '+灯油', '#ffd166'); } }
     if (e.t > 25) e.dead = true;
   },
@@ -522,7 +525,40 @@ function shake(v) { if (G.set.shake) G.shakeV = Math.min(1, G.shakeV + v); }
 function hitstop(t) { G.hitstop = Math.max(G.hitstop, t); }
 function slowmo(t, scale) { G.slowT = Math.max(G.slowT, t); G.slowScale = scale; }
 function toast(str) { G.ui.toasts.push({ str, t: 0 }); if (G.ui.toasts.length > 4) G.ui.toasts.shift(); }
-function hint(id) { if (!G.S || G.S.hints[id] || !HINTS[id]) return; G.S.hints[id] = true; G.ui.hint = HINTS[id]; G.ui.hintT = CFG.hint.time; }
+// ---------------- 操作提示 ----------------
+// 每条提示都绑定在触发它的房间上：换了房间、或者排队太久，就作废（没真正看到的提示，以后条件满足还会再出）。
+// 对话一开始，之前排着的提示全部丢掉；对话里触发的提示，等对话结束后在同一个房间里显示。
+function hint(id, o = {}) {
+  if (!G.S || !G.room || G.S.hints[id] || !HINTS[id]) return;
+  if ((G.ui.hint && G.ui.hint.id === id) || G.hintQ.some((h) => h.id === id)) return;
+  G.hintQ.push({ id, room: G.room.id, age: 0, delay: o.delay || 0 });
+}
+function forgetHint(H) { if (H && H.shown < 1.5) delete G.S.hints[H.id]; } // 只闪了一下的不算看过
+function dropHints() { forgetHint(G.ui.hint); G.ui.hint = null; G.hintQ = []; }
+function hintBusy() { return !!(G.script || G.ui.dlg || G.ui.menu || G.ui.letter || G.trans || G.paused || (G.P && G.P.dead)); }
+function updateHints(dt) {
+  if (!G.S || !G.room) return;
+  const room = G.room.id;
+  if (G.ui.hint && G.ui.hint.room !== room) { forgetHint(G.ui.hint); G.ui.hint = null; }
+  G.hintQ = G.hintQ.filter((h) => h.room === room && h.age < h.delay + CFG.hint.ttl && !G.S.hints[h.id]);
+  if (hintBusy()) return;
+  for (const h of G.hintQ) h.age += dt;
+  const H = G.ui.hint;
+  if (H) { H.t -= dt; H.shown += dt; if (H.t <= 0) G.ui.hint = null; return; }
+  const i = G.hintQ.findIndex((h) => h.age >= h.delay);
+  if (i < 0) return;
+  const h = G.hintQ.splice(i, 1)[0];
+  G.S.hints[h.id] = true;
+  G.ui.hint = { id: h.id, text: HINTS[h.id], room, t: CFG.hint.time, shown: 0 };
+}
+// 房间里的延迟动作：挂在当前房间上，换房间就跟着旧房间一起作废
+function later(sec, fn) { const R = G.room; if (R) (R.later || (R.later = [])).push({ t: sec, fn }); }
+function updateLater(dt) {
+  const R = G.room;
+  if (!R.later || !R.later.length) return;
+  const L = R.later; R.later = [];
+  for (const a of L) { a.t -= dt; if (a.t > 0) R.later.push(a); else if (G.room === R) a.fn(); }
+}
 function updateFx(dt) {
   for (const p of G.parts) { p.life -= dt; p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.97; p.vy *= 0.97; }
   G.parts = G.parts.filter((p) => p.life > 0);
@@ -577,6 +613,11 @@ function goRoom(id, opt) {
 function enterRoom(id, opt = {}) {
   const prevRegion = G.room ? G.room.region : null;
   G.room = loadRoom(id);
+  // 上一个房间的东西不能带过来：结算、锁门、Boss 台词、提示、排队的剧情
+  G.settle = null; // 结算没放完就换了房间：作废，回到 Boss 房时靠 after_pending 补放
+  G.lockExits = false; G.ui.bossLine = null; G.ui.toasts = []; G.bossFight = null; G.ui.boss = null; G.tele = [];
+  G.scriptQ = G.scriptQ.filter((q) => q.room === id);
+  if (G.ui.banner && G.ui.banner.big) G.ui.banner = null;
   const R = G.room, p = G.P;
   G.projs = []; G.parts = []; G.texts = [];
   placePlayer(opt);
@@ -590,6 +631,8 @@ function enterRoom(id, opt = {}) {
   // 进房间时的剧情
   for (const oe of R.def.onEnter) if (cond(oe.cond)) { runScript(oe.script); break; }
   if (R.def.boss && !G.S.flags['boss_' + R.def.boss] && !G.script) runScript(R.def.boss + '_intro');
+  // 上次 Boss 战后的结算没放完就离开了（比如调试传送）：回到这里补放
+  if (R.def.boss && G.S.flags.after_pending === R.def.boss && G.S.flags['boss_' + R.def.boss] && !G.settle) { startSettle(R.def.boss); G.settle.t = 0.6; }
   if (reg === 'lake' && (R.id === 'l2')) hint('ice');
   if (reg === 'kiln' && R.id === 'k4') hint('smoke');
   if (R.id === 'l3') hint('bell');
@@ -640,7 +683,7 @@ function checkExit() {
   const to = R.def.exits[dir];
   if (!to || G.lockExits) {
     p.x = clamp(p.x, 2, R.w * TS - 2); p.y = clamp(p.y, 2, R.h * TS - 2);
-    if (G.lockExits && !G.ui.toasts.length) toast('先打倒眼前的影子！');
+    if (G.lockExits && !G.settle && !G.ui.toasts.length) toast('先打倒眼前的影子！');
     return;
   }
   goRoom(to, { dir, x: p.x, y: p.y });
@@ -692,7 +735,7 @@ const HOOK = {
   lockExits(v) { G.lockExits = !!v; },
   refillSoup() { G.S.soup = G.S.soupMax; toast('暖汤满了'); },
   toast(s) { toast(s); },
-  abilityGet(id) { G.S.abil[id] = true; G.S.cur = abilList().indexOf(id); G.ui.banner = { title: '获得新能力：' + DATA.abilities[id].name, sub: DATA.abilities[id].desc, t: 0, big: true }; Snd.play('ability'); hint(id); if (abilList().length > 1) setTimeout(() => hint('wheel'), 6500); },
+  abilityGet(id) { G.S.abil[id] = true; G.S.cur = abilList().indexOf(id); G.ui.banner = { title: '获得新能力：' + DATA.abilities[id].name, sub: DATA.abilities[id].desc, t: 0, big: true }; Snd.play('ability'); G.S.hints[id] = true; /* 横幅就是这个能力的说明；滚轮提示由 updateGame 在之后补上 */ },
   freeIce() { const e = G.room.ents.find((q) => q.k === 'frozen'); if (e) { e.free = true; burst(e.x, e.y - 8, 20, ['#e4f8fc', '#a9dff0'], 70, 0.8, 1); e.gone = true; blockTile(G.room, e.tx, e.ty, -1); HOOK.spawnNpc('wang', e.tx, e.ty); } },
   sinkIce() { const e = G.room.ents.find((q) => q.k === 'frozen'); if (e) { e.gone = true; blockTile(G.room, e.tx, e.ty, -1); burst(e.x, e.y, 12, ['#a9dff0', '#1f4a73'], 40, 0.8, 1); Snd.play('splash'); } },
   shake(v) { shake(v); },

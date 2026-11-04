@@ -93,6 +93,8 @@ function updatePlayer(dt) {
       p.st += dt;
       if (p.st > 0.5) {
         p.x = p.safeX; p.y = p.safeY; p.state = 'move'; p.vx = p.vy = 0;
+        // 安全点后来被熔岩淹了（窑神二阶段）：换到最近的安全地面，不能原地再掉一次
+        if (!walkable(Math.floor(p.x / TS), Math.floor(p.y / TS))) { nearestWalkable(p); p.safeX = p.x; p.safeY = p.y; }
         if (!G.god) { S.hp -= CFG.player.fallDmg; Snd.play('hurt'); shake(0.25); }
         p.inv = 1;
         if (S.hp <= 0) killPlayer();
@@ -391,7 +393,7 @@ function burnVine(tx, ty) {
   if (tileAt(tx, ty) !== TL.VINE) return;
   setTile(tx, ty, TL.FLOOR);
   burst(tx * TS + 8, ty * TS + 8, 10, ['#ff6a2a', '#ffc24a', '#4f9a5c'], 40, 0.8, 1, -30);
-  setTimeout(() => { for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (G.room && tileAt(tx + dx, ty + dy) === TL.VINE) burnVine(tx + dx, ty + dy); }, 120);
+  later(0.12, () => { for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (tileAt(tx + dx, ty + dy) === TL.VINE) burnVine(tx + dx, ty + dy); });
 }
 function drawProjs(ox, oy) {
   for (const pr of G.projs) {
@@ -525,7 +527,7 @@ function checkClear() {
   const R = G.room, oc = R.def.onClear;
   if (!oc || !cond(oc.cond)) return;
   if (R.ents.some((e) => e.k === 'enemy' && !e.dead)) return;
-  setTimeout(() => { if (G.room === R && !G.script) runScript(oc.script); }, 600);
+  later(0.6, () => { if (!G.script) runScript(oc.script); });
 }
 function faceTo(e, p) { if (Math.abs(p.x - e.x) > 2) e.dir = p.x > e.x ? 1 : -1; }
 function chase(e, dt, tx, ty, spd) { const d = dist(e.x, e.y, tx, ty) || 1; if (d < 0.5) return; moveBox(e, ((tx - e.x) / d) * spd * dt, ((ty - e.y) / d) * spd * dt, !(e.D && e.D.fly), false); }
@@ -545,7 +547,7 @@ function meleeAI(e, dt, p, o) {
       break;
     }
     case 'tell': e.stT -= dt; faceTo(e, p); if (e.stT <= 0) { e.st = 'lunge'; e.stT = D.lungeTime; const dd = dist(e.x, e.y, p.x, p.y) || 1; e.ldx = (p.x - e.x) / dd; e.ldy = (p.y - e.y) / dd; e.atkHit = false; } break;
-    case 'lunge': e.stT -= dt; moveBox(e, e.ldx * D.lunge * dt, e.ldy * D.lunge * dt, true, false); e.atk = { x: e.x + e.ldx * 4, y: e.y - 4, r: 7 }; if (e.stT <= 0) { e.st = 'rest'; e.stT = 0.6; } break;
+    case 'lunge': e.stT -= dt; moveBox(e, e.ldx * D.lunge * dt, e.ldy * D.lunge * dt, true, false); e.atk = { x: e.x + e.ldx * 4, y: e.y - 4, r: 7 }; if (e.stT <= 0) { e.st = 'rest'; e.stT = D.rest || 0.6; } break;
     case 'rest': e.stT -= dt; if (o.flank) chase(e, dt, e.x - (p.x - e.x), e.y - (p.y - e.y), D.speed * 0.4); if (e.stT <= 0) e.st = 'chase'; break;
   }
 }
@@ -658,6 +660,13 @@ function startBoss(kind) {
   const R = G.room, D = DATA.bosses[kind];
   const x = R.bossX || R.w * TS / 2, y = R.bossY || R.h * TS / 2;
   G.bossFight = { kind, phase: 1 };
+  G.lockExits = true;
+  // 门关上的时候人还站在门口：挪进场地里，免得一步就走出 Boss 房
+  const p = G.P, ptx = Math.floor(p.x / TS), pty = Math.floor(p.y / TS);
+  if (!walkable(ptx, pty) || ptx <= 0 || pty <= 0 || ptx >= R.w - 1 || pty >= R.h - 1) {
+    p.x = clamp(p.x, TS * 1.5, R.w * TS - TS * 1.5); p.y = clamp(p.y, TS * 1.5, R.h * TS - TS * 1.5);
+    nearestWalkable(p); p.safeX = p.x; p.safeY = p.y; p.vx = p.vy = 0;
+  }
   const e = addEnt(R, 'boss', x, y, { kind, D, hp: D.hp, maxHp: D.hp, hw: 8, hh: 5, rad: 10, st: 'intro', stT: 1.0, flash: 0, dir: -1, inv: 0, phase: 1, vx: 0, vy: 0 });
   G.bossFight.e = e;
   G.ui.boss = { name: D.name, e }; G.ui.bossLine = null;
@@ -672,16 +681,44 @@ function bossDefeated(e) {
   e.dead = true;
   for (const q of R.ents) if (q.k === 'clone' || q.k === 'bshadow') q.dead = true;
   G.projs = G.projs.filter((q) => q.owner === 'p'); G.tele = [];
-  G.bossFight = null; G.ui.boss = null; R.dirty = true;
   if (BOSS[kind].cleanup) BOSS[kind].cleanup(R);
+  G.bossFight = null; G.ui.boss = null; G.ui.bossLine = null; R.dirty = true;
   Snd.play('victory'); slowmo(1.2, 0.3); shake(0.6);
   burst(e.x, e.y - 10, 50, ['#ffd166', '#fff1b0', '#463a62', '#2a2140'], 120, 1.4, 2, -10);
   G.S.flags['boss_' + kind] = true;
   Snd.music(REGION_MUSIC[R.region]);
-  if (kind === 'night') { setTimeout(() => runScript('night_after'), 1500); return; }
-  if (kind === 'zhu') { setTimeout(() => runScript('zhu_after'), 1500); return; }
-  for (let i = 0; i < 8; i++) dropLoot(e.x, e.y, 'wick', DATA.bossWicks / 8);
-  setTimeout(() => { giveItem('heart'); runScript(kind + '_after'); }, 1500);
+  if (kind !== 'night' && kind !== 'zhu') for (let i = 0; i < 8; i++) dropLoot(e.x, e.y, 'wick', DATA.bossWicks / 8);
+  startSettle(kind);
+}
+// Boss 战后结算：出口一直锁着，等奖励和战后台词全部放完才打开。
+// 结算状态绑定在这个房间上，换房间（调试传送、死亡复活）就作废，回到这个房间时从头补放。
+function startSettle(kind) {
+  G.S.flags.after_pending = kind;
+  G.settle = { kind, room: G.room.id, t: 1.6, started: false };
+  G.lockExits = true;
+}
+function updateSettle(dt) {
+  const s = G.settle;
+  if (!s) return;
+  if (!G.room || G.room.id !== s.room) { G.settle = null; return; }
+  if (!s.started) {
+    for (const q of G.room.ents) if (q.k === 'loot') q.magnet = true;
+    s.t -= dt;
+    if (s.t > 0 || G.script || G.P.dead) return;
+    s.started = true;
+    if (s.kind !== 'zhu' && s.kind !== 'night' && !G.S.flags['heart_' + s.kind]) { G.S.flags['heart_' + s.kind] = true; giveItem('heart'); }
+    runScript(s.kind + '_after');
+    return;
+  }
+  if (G.script || G.scene !== 'game') return;
+  // 剧情里接着又开了一场 Boss 战（选灯芯 → 长夜）：门继续锁着；
+  // after_pending 留着，万一死在长夜手里，回到台顶会重新放师父战后的选择
+  if (G.bossFight) { G.settle = null; return; }
+  // 台词放完了：把没捡的灯芯收进来，再开门
+  for (const q of G.room.ents) if (q.k === 'loot' && !q.dead) { q.dead = true; if (q.item === 'wick') G.S.wicks += q.n; else G.S.oil = Math.min(G.S.oilMax, G.S.oil + CFG.oil.bottle); }
+  delete G.S.flags.after_pending;
+  G.settle = null; G.lockExits = false; G.room.dirty = true;
+  if (G.room.def.gate === 'boss') { toast('出口打开了'); Snd.play('door'); }
 }
 EK.boss = {
   update(e, dt) { if (e.flash > 0) e.flash -= dt; e.inv = Math.max(0, e.inv - dt); if (e.dead || G.script || G.P.dead) return; BOSS[e.kind].update(e, dt, G.P); if (e.atk && !e.atkHit && dist(G.P.x, G.P.y - 4, e.atk.x, e.atk.y) < e.atk.r + 5) { if (hurtPlayer(e.atk.dmg || e.D.dmg, e.x, e.y, { shadow: e.kind === 'night' })) e.atkHit = true; } e.atk = null; },
@@ -690,6 +727,7 @@ EK.boss = {
     const B = BOSS[e.kind];
     if (B.canHurt && !B.canHurt(e, o)) return 'block';
     if (e.inv > 0) return false;
+    if (B.absorb) { const a = B.absorb(e, dmg, o); if (a) return a; } // 护甲先吃掉这一下
     if (B.dmgMul) dmg = Math.max(1, Math.round(dmg * B.dmgMul(e, o)));
     e.hp -= dmg; e.flash = 0.08;
     Snd.play('hit', o.third); burst(e.x, e.y - 12, 8, ['#fff1b0', '#ffd166', '#ffffff'], 80, 0.3, 1);
@@ -730,20 +768,20 @@ BOSS.ke = {
         moveBox(e, e.ldx * 330 * dt, e.ldy * 330 * dt, true, false);
         e.atk = { x: e.x, y: e.y - 6, r: 10, dmg: 3 };
         if (Math.random() < 0.8) part(e.x, e.y - 6, 0, 0, 0.3, '#463a62', 2);
-        if (e.stT <= 0) { e.dashes--; if (e.dashes > 0) BOSS.ke.aim(e, p, 0.42); else { e.st = 'move'; e.stT = e.phase === 2 ? 1.3 : 1.7; } }
+        if (e.stT <= 0) { e.dashes--; if (e.dashes > 0) BOSS.ke.aim(e, p, 0.4); else { e.st = 'move'; e.stT = e.phase === 2 ? 1.2 : 1.5; } }
         break;
       case 'fanTell': if (e.stT <= 0) { BOSS.ke.fan(e, p, e.phase === 2 ? 7 : 5, 2); e.st = 'move'; e.stT = 1.5; } break;
     }
-    if (e.phase === 2) { e.cloneT -= dt; if (e.cloneT <= 0 && !G.room.ents.some((q) => q.k === 'clone' && !q.dead)) BOSS.ke.clones(e); }
+    if (e.phase === 2) { e.cloneT -= dt; if (e.cloneT <= 0 && !G.room.ents.some((q) => q.k === 'clone' && !q.dead)) BOSS.ke.clones(e, 2); }
   },
-  beginDash(e, p) { e.dashes = 3; BOSS.ke.aim(e, p, 0.7); },
+  beginDash(e, p) { e.dashes = e.phase === 2 ? 3 : 2; BOSS.ke.aim(e, p, 0.7); }, // 一阶段两段突进，二阶段三段
   aim(e, p, t) { const dd = dist(e.x, e.y, p.x, p.y) || 1; e.ldx = (p.x - e.x) / dd; e.ldy = (p.y - e.y) / dd; e.st = 'dashTell'; e.stT = t; tele({ type: 'line', x: e.x, y: e.y - 4, ang: Math.atan2(e.ldy, e.ldx), len: 330 * 0.22 + 10, w: 12, dur: t }); },
   fan(e, p, n, dmg) { const a0 = Math.atan2(p.y - 5 - e.y, p.x - e.x); for (let i = 0; i < n; i++) { const a = a0 + (i - (n - 1) / 2) * 0.2; spawnProj({ kind: 'shuriken', owner: 'e', x: e.x, y: e.y - 8, vx: Math.cos(a) * 130, vy: Math.sin(a) * 130, life: 3, dmg, r: 3, spin: 18 }); } Snd.play('shoot'); },
   phase2(e) { bossLine('影子不止一个——你分得出哪个是我吗？'); BOSS.ke.clones(e); },
-  clones(e) {
-    e.cloneT = 9;
+  clones(e, n = 3) {
+    e.cloneT = 11;
     const R = G.room;
-    for (let i = 0; i < 3; i++) { const a = (i / 3) * TAU + Math.random(); const c = addEnt(R, 'clone', e.x + Math.cos(a) * 60, e.y + Math.sin(a) * 40, { boss: e, st: 'move', stT: rand(0.5, 1.8), hw: 7, hh: 5, rad: 9, dir: 1, kbx: 0, kby: 0 }); burst(c.x, c.y - 8, 10, ['#2a2140', '#463a62'], 40, 0.6, 1); }
+    for (let i = 0; i < n; i++) { const a = (i / n) * TAU + Math.random(); const c = addEnt(R, 'clone', e.x + Math.cos(a) * 60, e.y + Math.sin(a) * 40, { boss: e, st: 'move', stT: rand(0.5, 1.8), life: 7, hw: 7, hh: 5, rad: 9, dir: 1, kbx: 0, kby: 0 }); burst(c.x, c.y - 8, 10, ['#2a2140', '#463a62'], 40, 0.6, 1); }
     // 分身出现时，真身也换个位置
     const a = Math.random() * TAU; e.x = clamp(e.x + Math.cos(a) * 50, 40, R.w * TS - 40); e.y = clamp(e.y + Math.sin(a) * 40, 40, R.h * TS - 40);
   },
@@ -762,6 +800,7 @@ EK.clone = {
     if (e.dead || G.script) return;
     const p = G.P, b = e.boss; e.stT -= dt; faceTo(e, p);
     if (b.dead) { e.dead = true; return; }
+    e.life -= dt; if (e.life <= 0 && e.st === 'move') { e.dead = true; burst(e.x, e.y - 8, 12, ['#2a2140', '#463a62'], 40, 0.6, 1, -20); return; } // 分身撑不了多久
     if (e.st === 'move') { const a = Math.atan2(e.y - p.y, e.x - p.x) + dt * 2; chase(e, dt, p.x + Math.cos(a) * 90, p.y + Math.sin(a) * 70, 60); if (e.stT <= 0) { if (Math.random() < 0.5) { const dd = dist(e.x, e.y, p.x, p.y) || 1; e.ldx = (p.x - e.x) / dd; e.ldy = (p.y - e.y) / dd; e.st = 'tell'; e.stT = 0.7; tele({ type: 'line', x: e.x, y: e.y - 4, ang: Math.atan2(e.ldy, e.ldx), len: 75, w: 10, dur: 0.7 }); } else { e.st = 'fan'; e.stT = 0.6; } } }
     else if (e.st === 'tell') { if (e.stT <= 0) { e.st = 'dash'; e.stT = 0.22; e.atkHit = false; } }
     else if (e.st === 'dash') { moveBox(e, e.ldx * 320 * dt, e.ldy * 320 * dt, true, false); if (!e.atkHit && dist(p.x, p.y - 4, e.x, e.y - 6) < 13) { if (hurtPlayer(2, e.x, e.y)) e.atkHit = true; } if (e.stT <= 0) { e.st = 'move'; e.stT = rand(1.6, 2.6); } }
@@ -807,7 +846,7 @@ BOSS.carp = {
     for (let y = 1; y < 14; y++) for (let x = 1; x < R.w - 1; x++) {
       if (R.t[y * R.w + x] !== TL.ICE) continue;
       const onFloe = FLOES.some(([fx, fy, fw, fh]) => x >= fx && x < fx + fw && y >= fy && y < fy + fh);
-      if (!onFloe) { R.t[y * R.w + x] = TL.WATER; R.anim.push(y * R.w + x); }
+      if (!onFloe) { R.t[y * R.w + x] = TL.WATER; R.anim.push(y * R.w + x); (e.melted || (e.melted = [])).push(y * R.w + x); }
     }
     R.dirty = true; Snd.play('iceCrack'); shake(0.7);
     const p = G.P; if (tilePit(R, tileAt(Math.floor(p.x / TS), Math.floor(p.y / TS)))) { p.safeX = 14 * TS + 8; p.safeY = 14 * TS + 8; }
@@ -824,22 +863,34 @@ BOSS.carp = {
     bossSprite(e.st === 'flop' ? A.open[side][0] : A.idle[side][Math.floor(G.t * 6) % 2], e, ox, oy + hop, 40, 28, 6);
   },
   light(e) { return { x: e.hidden ? e.fx : e.x, y: (e.hidden ? e.fy : e.y) - 10, r: 26, cool: 1, env: false }; },
+  // 打完以后湖面重新冻上，不用再跳浮冰离开
+  cleanup(R) {
+    const e = G.bossFight && G.bossFight.e;
+    if (!e || !e.melted) return;
+    for (const i of e.melted) R.t[i] = TL.ICE;
+    const set = new Set(e.melted); R.anim = R.anim.filter((i) => !set.has(i)); e.melted = null; R.dirty = true;
+    later(0.3, () => { toast('湖面重新冻上了'); Snd.play('iceCrack'); });
+  },
 };
 // ------------------- 窑神：先打碎四块瓷甲；二阶段熔岩顺着沟流下来，推罐子挡住 -------------------
+// 瓷甲裂纹的形状（以瓷片中心为原点，-1~1）
+const KILN_CRACKS = [[[-0.9, -0.5], [-0.2, 0], [0.1, 0.7]], [[0.8, -0.8], [0.2, -0.2], [0.6, 0.4]], [[-0.6, 0.9], [-0.1, 0.3], [-0.7, -0.1]], [[0.1, -0.9], [-0.2, -0.3], [0.5, 0.1], [0.9, 0.6]]];
+function pixLine(x0, y0, x1, y1) { const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0), 1); for (let i = 0; i <= n; i++) ctx.fillRect(Math.round(x0 + (x1 - x0) * i / n), Math.round(y0 + (y1 - y0) * i / n), 1, 1); }
 BOSS.kiln = {
-  init(e, R) { e.hw = 14; e.hh = 6; e.rad = 18; e.plates = [e.D.plate, e.D.plate, e.D.plate, e.D.plate]; e.st = 'walk'; e.stT = 1.5; e.flows = [0, 0, 0]; e.flowT = 0; e.flowPhase = 'off'; e.lavaSet = []; e.cols = []; for (let x = 0; x < R.w; x++) if (R.t[2 * R.w + x] === TL.VENT) e.cols.push(x); },
+  init(e, R) { e.hw = 14; e.hh = 6; e.rad = 18; e.plateMax = e.D.plate; e.plates = [e.D.plate, e.D.plate, e.D.plate, e.D.plate]; e.cx0 = R.w * TS / 2; e.cy0 = R.h * TS / 2 + 10; e.st = 'walk'; e.stT = 1.5; e.flows = [0, 0, 0]; e.flowT = 0; e.flowPhase = 'off'; e.lavaSet = []; e.cols = []; for (let x = 0; x < R.w; x++) if (R.t[2 * R.w + x] === TL.VENT) e.cols.push(x); },
   exposed(e) { return e.plates.every((h) => h <= 0); },
   update(e, dt, p) {
     e.stT -= dt; faceTo(e, p);
     const d = dist(e.x, e.y, p.x, p.y);
     switch (e.st) {
-      case 'walk': chase(e, dt, p.x, p.y, 20); if (e.stT <= 0) { if (d < 90 && Math.random() < 0.6) { e.st = 'poundTell'; e.stT = 0.85; tele({ type: 'circle', x: e.x, y: e.y, r: 70, dur: 0.85 }); } else { e.st = 'shardTell'; e.stT = 0.55; } } break;
+      case 'walk': { const R = G.room; chase(e, dt, clamp(p.x, 72, R.w * TS - 72), clamp(p.y, 72, R.h * TS - 56), 20); } /* 不追进墙角 */ if (e.stT <= 0) { if (d < 90 && Math.random() < 0.6) { e.st = 'poundTell'; e.stT = 0.85; tele({ type: 'circle', x: e.x, y: e.y, r: 70, dur: 0.85 }); } else { e.st = 'shardTell'; e.stT = 0.55; } } break;
       case 'poundTell': if (e.stT <= 0) { e.st = 'rest'; e.stT = 1.0; Snd.play('slam'); shake(0.5); spawnProj({ kind: 'ring', owner: 'e', x: e.x, y: e.y, r0: 12, r1: 80, rr: 12, life: 0.6, dmg: 4, col: 'rgba(255,150,80,0.9)' }); if (d < 26) hurtPlayer(4, e.x, e.y); burst(e.x, e.y, 20, ['#55403e', '#ff6a2a'], 80, 0.6, 2, 40); } break;
       case 'shardTell': if (e.stT <= 0) { e.st = 'rest'; e.stT = 0.9; const n = e.phase === 2 ? 12 : 8, a0 = Math.random(); for (let i = 0; i < n; i++) { const a = a0 + (i / n) * TAU; spawnProj({ kind: 'porcelain', owner: 'e', x: e.x, y: e.y - 16, vx: Math.cos(a) * 105, vy: Math.sin(a) * 105, life: 3, dmg: 3, r: 3 }); } Snd.play('shatter'); } break;
-      case 'stagger': if (e.stT <= 0) { e.st = 'walk'; e.stT = 1.2; } break;
+      case 'stagger': if (Math.random() < 0.3) part(e.x + rand(-10, 10), e.y - rand(10, 30), rand(-10, 10), -20, 0.6, Math.random() < 0.5 ? '#ffd166' : '#ff8a3c', 1); if (e.stT <= 0) { e.st = 'walk'; e.stT = 1.0; ftext(e.x, e.y - 46, '站起来了', '#d6cfe0'); } break;
+      case 'flinch': if (e.stT <= 0) { e.st = 'walk'; e.stT = 0.6; } break;
       case 'rest': if (e.stT <= 0) { e.st = 'walk'; e.stT = rand(1.2, 2.0); } break;
     }
-    if (d < 20) e.atk = { x: e.x, y: e.y - 6, r: 14, dmg: 3 };
+    if (d < 20 && e.st !== 'stagger' && e.st !== 'flinch') e.atk = { x: e.x, y: e.y - 6, r: 14, dmg: 3 };
     if (e.phase === 2) BOSS.kiln.lavaFlow(e, dt);
   },
   // 熔岩沟：从顶上的熔岩口往下流，碰到罐子就停
@@ -869,34 +920,83 @@ BOSS.kiln = {
     for (const idx of e.lavaSet) if (R.t[idx] === TL.LAVA) R.t[idx] = TL.FLOOR;
     e.lavaSet = []; R.lava = []; R.anim = R.anim.filter((i) => R.t[i] !== TL.FLOOR); R.dirty = true;
   },
-  canHurt(e, o) {
-    if (BOSS.kiln.exposed(e)) return true;
-    // 瓷甲：第三段挥击或投火才打得碎
-    if (o.third || o.src === 'fire') {
-      const p = G.P, sx = o.fx != null ? o.fx : p.x, sy = o.fy != null ? o.fy : p.y;
-      let best = -1, bd = 1e9;
-      e.plates.forEach((h, i) => { if (h <= 0) return; const [px, py] = BOSS.kiln.platePos(e, i); const dd = dist(px, py, sx, sy); if (dd < bd) { bd = dd; best = i; } });
-      if (best >= 0) {
-        e.plates[best] -= o.src === 'fire' ? 4 : 4; e.flash = 0.06; Snd.play('shatter');
-        const [px, py] = BOSS.kiln.platePos(e, best); burst(px, py, 12, ['#e3ecf2', '#3e6fa8', '#9fb3c6'], 70, 0.6, 1, 30);
-        if (e.plates[best] <= 0) { ftext(px, py - 8, '瓷甲碎了', '#bfe9ff'); shake(0.3); }
-        if (BOSS.kiln.exposed(e)) { e.st = 'stagger'; e.stT = 2.2; ftext(e.x, e.y - 40, '露出核心了！', '#ffd166'); Snd.play('phase'); }
-      }
-      return false;
+  // 瓷甲：每一下都算数（第三段 ×1.5，投火 4 点），打在离出手点最近的那块上。四块全碎后跪地硬直 4 秒。
+  absorb(e, dmg, o) {
+    if (BOSS.kiln.exposed(e)) return false;
+    const p = G.P, sx = o.fx != null ? o.fx : p.x, sy = o.fy != null ? o.fy : p.y;
+    let best = -1, bd = 1e9;
+    e.plates.forEach((h, i) => { if (h <= 0) return; const [px, py] = BOSS.kiln.platePos(e, i); const dd = dist(px, py, sx, sy); if (dd < bd) { bd = dd; best = i; } });
+    if (best < 0) return false;
+    const d = o.src === 'fire' ? 4 : o.src === 'burst' ? 2 : Math.round(dmg * (o.third ? 1.5 : 1));
+    e.plates[best] = Math.max(0, e.plates[best] - d); e.flash = 0.06; e.plateHit = best; e.plateHitT = 0.25;
+    const [px, py] = BOSS.kiln.platePos(e, best);
+    burst(px, py, o.third ? 10 : 5, ['#e3ecf2', '#3e6fa8', '#9fb3c6'], 60, 0.5, 1, 40);
+    ftext(px + rand(-4, 4), py - 10, `-${d}`, '#bfe9ff');
+    Snd.play(e.plates[best] > 0 ? 'hit' : 'shatter', o.third);
+    if (e.plates[best] <= 0) {
+      ftext(px, py - 20, '瓷甲碎了！', '#bfe9ff'); shake(0.3); hitstop(0.08);
+      burst(px, py, 18, ['#e3ecf2', '#3e6fa8', '#9fb3c6', '#ffffff'], 90, 0.8, 2, 60);
+      if (BOSS.kiln.exposed(e)) {
+        e.st = 'stagger'; e.stT = 4; e.atk = null; G.tele = G.tele.filter((t) => t.type !== 'circle');
+        ftext(e.x, e.y - 52, '瓷甲全碎！它跪下了，快打！', '#ffd166'); Snd.play('phase'); shake(0.5);
+      } else if (e.st === 'walk' || e.st === 'rest') { e.st = 'flinch'; e.stT = 0.6; }
     }
-    Snd.play('block'); ftext(e.x, e.y - 40, '太硬了！第三段或投火', '#d6cfe0');
-    return false;
+    return true;
+  },
+  dmgMul(e) { return e.st === 'stagger' ? 1.25 : 1; },
+  onBurst(e) { if (!BOSS.kiln.exposed(e)) BOSS.kiln.absorb(e, 2, { src: 'burst' }); },
+  hud(e, x, y, w) {
+    if (!BOSS.kiln.exposed(e)) {
+      txt('瓷甲', x - 3, y + 4.5, 7, '#bfe9ff', 'right', true);
+      const sw = (w - 9) / 4;
+      e.plates.forEach((h, i) => {
+        const sx = Math.round(x + i * (sw + 3));
+        ctx.fillStyle = '#120e1a'; ctx.fillRect(sx - 1, y - 1, Math.round(sw) + 2, 5);
+        ctx.fillStyle = '#1d2a3a'; ctx.fillRect(sx, y, Math.round(sw), 3);
+        const hit = e.plateHit === i && e.plateHitT > 0;
+        ctx.fillStyle = hit ? '#ffffff' : '#9fd3f0'; ctx.fillRect(sx, y, Math.round(sw * h / e.plateMax), 3);
+      });
+    } else if (e.st === 'stagger') {
+      txt('硬直', x - 3, y + 4.5, 7, '#ffd166', 'right', true);
+      ctx.fillStyle = '#120e1a'; ctx.fillRect(x - 1, y - 1, w + 2, 5);
+      ctx.fillStyle = '#ffd166'; ctx.fillRect(x, y, Math.round(w * clamp(e.stT / 4, 0, 1)), 3);
+    }
   },
   platePos(e, i) { return [[e.x, e.y - 36], [e.x, e.y - 20], [e.x - 16, e.y - 22], [e.x + 16, e.y - 22]][i]; },
-  phase2(e) { bossLine('窑火……还没熄！熔岩要顺着沟流下来了！'); e.flowT = 1.5; hint('jar'); },
+  phase2(e) {
+    bossLine('窑火……还没熄！又烧出了瓷甲，熔岩也要流下来了！');
+    e.flowT = 2.5; hint('jar');
+    // 头和胸重新长出瓷甲：再打碎一次，它会再跪一次
+    e.plates[0] = e.plates[1] = e.plateMax;
+    if (e.st === 'stagger') e.stT = Math.min(e.stT, 0.6);
+    burst(e.x, e.y - 30, 24, ['#e3ecf2', '#9fb3c6', '#ff8a3c'], 70, 0.8, 1, -20);
+  },
   draw(e, ox, oy) {
     const A = ART.boss.kiln, f = Math.floor(G.t * 2) % 2;
     drawShadow(e.x - ox, e.y + 4 - oy, 18, 0.5);
     const ex = BOSS.kiln.exposed(e);
     const shake2 = e.st === 'poundTell' ? rand(-1, 1) : 0;
-    ctx.drawImage(e.flash > 0 && ex ? solid(A.core[f], '#fff') : (ex ? A.core[f] : A.body[f]), Math.round(e.x - 24 - ox + shake2), Math.round(e.y - 44 - oy));
+    ctx.drawImage(e.flash > 0 && ex ? solid(A.core[f], '#fff') : (ex ? A.core[f] : A.body[f]), Math.round(e.x - 24 - ox + shake2), Math.round(e.y - 44 - oy + (e.st === 'stagger' ? 3 : 0)));
     const off = [[-7, -5], [-9, -7], [-5, -8], [-5, -8]];
-    e.plates.forEach((h, i) => { if (h <= 0) return; const [px, py] = BOSS.kiln.platePos(e, i), im = A.plates[i]; ctx.drawImage(e.flash > 0 ? solid(im, '#fff') : im, Math.round(px + off[i][0] - ox + shake2), Math.round(py + off[i][1] - oy)); });
+    if (e.plateHitT > 0) e.plateHitT -= 1 / 60;
+    const kneel = e.st === 'stagger' ? 3 : 0;
+    e.plates.forEach((h, i) => {
+      if (h <= 0) return;
+      const [px, py] = BOSS.kiln.platePos(e, i), im = A.plates[i], hit = e.plateHit === i && e.plateHitT > 0;
+      const jx = hit ? Math.round(rand(-1, 1)) : 0;
+      const bx = Math.round(px + off[i][0] - ox + shake2 + jx), by = Math.round(py + off[i][1] - oy + kneel);
+      ctx.drawImage(hit && e.plateHitT > 0.18 ? solid(im, '#fff') : im, bx, by);
+      // 裂纹：越伤越多
+      const lv = Math.ceil((1 - h / e.plateMax) * 4);
+      const hx = im.width / 2, hy = im.height / 2;
+      ctx.fillStyle = '#16202e';
+      for (let k = 0; k < lv; k++) {
+        const C = KILN_CRACKS[(k + i) % KILN_CRACKS.length];
+        for (let j = 0; j < C.length - 1; j++) pixLine(bx + hx + C[j][0] * hx * 0.8, by + hy + C[j][1] * hy * 0.8, bx + hx + C[j + 1][0] * hx * 0.8, by + hy + C[j + 1][1] * hy * 0.8);
+      }
+      if (lv >= 3 && Math.random() < 0.04) part(px + rand(-4, 4), py + 4, rand(-10, 10), 10, 0.5, '#9fb3c6', 1);
+    });
+    if (e.st === 'stagger') for (let i = 0; i < 3; i++) { const a = G.t * 5 + i * 2.1; ctx.fillStyle = '#ffe27a'; ctx.fillRect(Math.round(e.x - ox + Math.cos(a) * 12), Math.round(e.y - 48 - oy + Math.sin(a) * 3), 2, 2); }
   },
   light(e) { return { x: e.x, y: e.y - 20, r: BOSS.kiln.exposed(e) ? 44 : 26, warm: 1, env: false }; },
 };
@@ -1012,37 +1112,52 @@ BOSS.night = {
   init(e, R) {
     e.hw = 20; e.hh = 8; e.rad = 22; e.st = 'drift'; e.stT = 2; e.tx = e.x; e.ty = e.y; e.vulnT = 0;
     for (const q of R.ents) if (q.k === 'braz') q.lit = false;
-    e.ally = addEnt(R, 'npc', R.w * TS / 2, R.h * TS - 60, { id: 'zhu', ally: true });
+    e.ally = addEnt(R, 'npc', R.w * TS / 2, R.h * TS - 60, { id: 'zhu', ally: true, cd: 0.6, shot: 2.5 });
   },
-  lit(e) { return e.vulnT > 0 || G.room.ents.some((q) => q.k === 'braz' && q.lit && dist(q.x, q.y, e.x, e.y) < CFG.light.brazier * 1.1); },
+  // 被照亮：在亮着的火盆旁边，或者刚被光爆 / 师父的光弹照到
+  lit(e) { return e.vulnT > 0 || !!BOSS.night.litBraz(e, CFG.light.brazier * 1.1); },
+  litBraz(e, r) { let best = null, bd = r; for (const q of G.room.ents) if (q.k === 'braz' && q.lit && !q.dead) { const d = dist(q.x, q.y, e.x, e.y); if (d < bd) { bd = d; best = q; } } return best; },
   update(e, dt, p) {
     e.stT -= dt; e.vulnT -= dt;
-    const R = G.room, fast = e.phase === 2 ? 1.3 : 1;
-    // 慢慢游荡
-    if (dist(e.x, e.y, e.tx, e.ty) < 8 || e.retarget < G.t || !e.retarget) { e.tx = clamp(p.x + rand(-120, 120), 60, R.w * TS - 60); e.ty = clamp(p.y + rand(-80, 60), 50, R.h * TS - 70); e.retarget = G.t + 3; }
-    chase(e, dt, e.tx, e.ty, 26 * fast);
-    if (e.stT <= 0) {
-      const r = Math.random();
-      if (r < 0.4) { // 从边上伸出触手
-        const ang = Math.atan2(p.y - e.y, p.x - e.x) + rand(-0.3, 0.3);
-        const sx = e.x, sy = e.y - 10;
-        tele({ type: 'line', x: sx, y: sy, ang, len: 260, w: 14, dur: 0.85 / fast });
-        e.tent = { ang, sx, sy, t: 0.85 / fast };
-        e.stT = 2.0 / fast;
-      } else if (r < 0.75) { // 追踪的黑球
-        const n = e.phase === 2 ? 4 : 3;
-        for (let i = 0; i < n; i++) { const a = (i / n) * TAU; spawnProj({ kind: 'orb', owner: 'e', x: e.x + Math.cos(a) * 20, y: e.y - 10 + Math.sin(a) * 14, vx: Math.cos(a) * 50, vy: Math.sin(a) * 50, life: 5, dmg: 3, r: 4, home: 1.6, ghost: true, shadow: true }); }
-        Snd.play('shoot'); e.stT = 2.4 / fast;
-      } else { // 吞光：把火盆吹灭
-        let n = 0; for (const q of R.ents) if (q.k === 'braz' && q.lit && Math.random() < 0.6) { q.lit = false; n++; burst(q.x, q.y - 8, 8, ['#2a2140', '#463a62'], 40, 0.6, 1); }
-        if (n) { bossLine('……光……是……我的……'); }
-        e.stT = 2.2 / fast;
+    const R = G.room, fast = e.phase === 2 ? 1.25 : 1;
+    if (e.st === 'devour') {
+      // 吞光：趴在火盆上不动，几秒后把它吹灭。这段时间它一直被火光照着
+      const b = e.prey;
+      if (!b || !b.lit) { e.st = 'drift'; e.stT = 1.2; e.prey = null; }
+      else {
+        chase(e, dt, b.x, b.y + 4, 10);
+        if (Math.random() < 0.6) { const a = Math.random() * TAU; part(b.x + Math.cos(a) * 14, b.y - 8 + Math.sin(a) * 10, (e.x - b.x) * 0.9, (e.y - 14 - b.y) * 0.9, 0.5, Math.random() < 0.5 ? '#ffd166' : '#2a2140', 1); }
+        if (e.stT <= 0) { b.lit = false; burst(b.x, b.y - 8, 14, ['#2a2140', '#463a62'], 50, 0.7, 1); Snd.play('phase'); e.st = 'drift'; e.stT = 1.0 / fast; e.prey = null; }
+      }
+    } else {
+      // 它想要光：有亮着的火盆，就慢慢飘过去吞掉
+      const prey = BOSS.night.litBraz(e, 1e9);
+      if (prey) {
+        chase(e, dt, prey.x, prey.y + 4, 30 * fast);
+        if (dist(e.x, e.y, prey.x, prey.y) < 40 && !e.tent) {
+          e.st = 'devour'; e.stT = e.phase === 2 ? 4.5 : 5.5; e.prey = prey;
+          ftext(prey.x, prey.y - 28, '它在吞光！趁现在打！', '#fff1b0'); Snd.play('warn');
+        }
+      } else {
+        if (dist(e.x, e.y, e.tx, e.ty) < 8 || !e.retarget || e.retarget < G.t) { e.tx = clamp(p.x + rand(-110, 110), 60, R.w * TS - 60); e.ty = clamp(p.y + rand(-70, 50), 56, R.h * TS - 70); e.retarget = G.t + 3; }
+        chase(e, dt, e.tx, e.ty, 26 * fast);
+      }
+      if (e.stT <= 0 && e.st !== 'devour') {
+        if (Math.random() < 0.5) { // 伸出触手
+          const ang = Math.atan2(p.y - e.y, p.x - e.x) + rand(-0.25, 0.25), sx = e.x, sy = e.y - 10;
+          tele({ type: 'line', x: sx, y: sy, ang, len: 260, w: 14, dur: 0.9 / fast });
+          e.tent = { ang, sx, sy, t: 0.9 / fast };
+          e.stT = 2.2 / fast;
+        } else { // 追踪的黑球（能用挥击打掉）
+          const n = e.phase === 2 ? 4 : 3;
+          for (let i = 0; i < n; i++) { const a = (i / n) * TAU; spawnProj({ kind: 'orb', owner: 'e', x: e.x + Math.cos(a) * 20, y: e.y - 10 + Math.sin(a) * 14, vx: Math.cos(a) * 50, vy: Math.sin(a) * 50, life: 5, dmg: 3, r: 4, home: 1.5, ghost: true, shadow: true }); }
+          Snd.play('shoot'); e.stT = 2.6 / fast;
+        }
       }
     }
     if (e.tent) {
       e.tent.t -= dt;
       if (e.tent.t <= 0) {
-        // 触手扫过：判定这条线
         const T = e.tent, dx = Math.cos(T.ang), dy = Math.sin(T.ang);
         const px = p.x - T.sx, py = p.y - 4 - T.sy, along = px * dx + py * dy, perp = Math.abs(-px * dy + py * dx);
         if (along > 0 && along < 260 && perp < 10) hurtPlayer(4, T.sx, T.sy, { shadow: true });
@@ -1050,33 +1165,68 @@ BOSS.night = {
         Snd.play('slam'); shake(0.3); e.tent = null;
       }
     }
-    if (dist(p.x, p.y, e.x, e.y) < 22) e.atk = { x: e.x, y: e.y - 8, r: 16, dmg: 3 };
-    // 师父：点火盆、打光弹
+    if (dist(p.x, p.y, e.x, e.y) < 22 && e.st !== 'devour') e.atk = { x: e.x, y: e.y - 8, r: 16, dmg: 3 };
+    // 师父：一直帮你点火盆（先点离你近的），隔一会儿朝长夜打一发光弹
     const al = e.ally;
     if (al && !al.dead) {
-      al.cd = (al.cd || 1.5) - dt;
-      const unlit = R.ents.filter((q) => q.k === 'braz' && !q.lit);
-      if (unlit.length && !al.walkTo && al.cd <= 0) { const b = unlit[(Math.random() * unlit.length) | 0]; al.walkTo = [b.x, b.y + 16]; al.target = b; al.cd = 1; }
-      if (al.target && !al.walkTo) { igniteBrazier(al.target, true); al.target = null; al.cd = 2.5; }
-      al.shot = (al.shot || 2) - dt;
-      if (al.shot <= 0) { al.shot = 2.2; const a = Math.atan2(e.y - 10 - al.y, e.x - al.x); spawnProj({ kind: 'light', owner: 'p', x: al.x, y: al.y - 10, vx: Math.cos(a) * 150, vy: Math.sin(a) * 150, life: 3, dmg: 0, r: 3, glow: 16, ghost: true, allyShot: true }); }
+      if (al.target && !al.walkTo) { igniteBrazier(al.target, true); al.target = null; al.cd = 2.2; } // 先点火，再挑下一个
+      al.cd -= dt;
+      if (!al.target && al.cd <= 0) {
+        let b = null, bd = 1e9;
+        for (const q of R.ents) if (q.k === 'braz' && !q.lit && q !== (e.prey || null)) { const d = dist(q.x, q.y, p.x, p.y); if (d < bd) { bd = d; b = q; } }
+        if (b) { al.walkTo = [b.x, b.y + 14]; al.target = b; al.walkSpeed = 90; }
+      }
+      if (al.target && al.target.lit) { al.target = null; al.walkTo = null; al.cd = 0.3; } // 你自己点亮了，换下一个
+      al.shot -= dt;
+      if (al.shot <= 0) { al.shot = 3; const a = Math.atan2(e.y - 10 - al.y, e.x - al.x); spawnProj({ kind: 'light', owner: 'p', x: al.x, y: al.y - 10, vx: Math.cos(a) * 160, vy: Math.sin(a) * 160, life: 3, dmg: 0, r: 3, glow: 16, ghost: true, allyShot: true }); }
     }
     // 师父的光弹打中长夜：让它在光里待一会儿
-    for (const pr of G.projs) if (pr.allyShot && !pr.dead && dist(pr.x, pr.y, e.x, e.y - 10) < 20) { pr.dead = true; e.vulnT = Math.max(e.vulnT, 1.2); burst(pr.x, pr.y, 10, ['#fff1b0', '#ffd166'], 60, 0.5, 1); EK.boss.hurt(e, 2, { src: 'ally' }); }
+    for (const pr of G.projs) if (pr.allyShot && !pr.dead && dist(pr.x, pr.y, e.x, e.y - 10) < 22) { pr.dead = true; e.vulnT = Math.max(e.vulnT, 2.5); burst(pr.x, pr.y, 10, ['#fff1b0', '#ffd166'], 60, 0.5, 1); EK.boss.hurt(e, 2, { src: 'ally' }); }
   },
   dmgMul(e, o) { return o.src === 'ally' ? 1 : BOSS.night.lit(e) ? 1 : 0.34; },
-  onHurt(e) { if (!BOSS.night.lit(e) && Math.random() < 0.3) ftext(e.x, e.y - 40, '把它引到光里！', '#fff1b0'); },
-  onBurst(e) { e.vulnT = 3; ftext(e.x, e.y - 40, '照亮了！', '#fff1b0'); },
-  phase2(e) { bossLine('……光……不……够……'); G.bossFight.extraDark = 0.06; },
-  draw(e, ox, oy) {
-    const f = Math.floor(G.t * 3) % 2, lit = BOSS.night.lit(e);
-    ctx.globalAlpha = lit ? 1 : 0.8;
-    ctx.drawImage(e.flash > 0 ? solid(ART.boss.night[f], '#fff') : ART.boss.night[f], Math.round(e.x - 32 - ox), Math.round(e.y - 44 - oy + Math.sin(G.t * 2) * 2));
-    ctx.globalAlpha = 1;
-    if (lit) { ctx.strokeStyle = 'rgba(255,241,176,0.6)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.ellipse(e.x - ox, e.y - 20 - oy, 28, 20, 0, 0, TAU); ctx.stroke(); }
+  onHurt(e) { if (!BOSS.night.lit(e) && (!e.hintT || e.hintT < G.t)) { e.hintT = G.t + 2.5; ftext(e.x, e.y - 46, '没被照亮，只吃三分之一伤害', '#a69cb8'); } },
+  onBurst(e) { e.vulnT = Math.max(e.vulnT, 5); ftext(e.x, e.y - 46, '照亮了！', '#fff1b0'); },
+  phase2(e) { bossLine('……光……不……够……'); G.bossFight.extraDark = 0.04; },
+  hud(e, x, y, w) {
+    if (BOSS.night.lit(e)) {
+      txt('被照亮', x - 3, y + 4.5, 7, '#fff1b0', 'right', true);
+      const t = e.st === 'devour' ? e.stT / (e.phase === 2 ? 4.5 : 5.5) : e.vulnT > 0 ? e.vulnT / 5 : 1;
+      ctx.fillStyle = '#120e1a'; ctx.fillRect(x - 1, y - 1, w + 2, 5);
+      ctx.fillStyle = '#ffd166'; ctx.fillRect(x, y, Math.round(w * clamp(t, 0, 1)), 3);
+      txt('全伤害', x + w + 3, y + 4.5, 7, '#ffd166', 'left');
+    } else { txt('在暗处', x - 3, y + 4.5, 7, '#8c86a0', 'right', true); txt('伤害只有 1/3 —— 光爆，或者等它去吞火盆', x, y + 4.5, 7, '#8c86a0', 'left'); }
   },
+  draw(e, ox, oy) {
+    const f = Math.floor(G.t * 3) % 2, lit = BOSS.night.lit(e), im = ART.boss.night[f];
+    const bx = Math.round(e.x - 32 - ox), by = Math.round(e.y - 44 - oy + Math.sin(G.t * 2) * 2);
+    ctx.globalAlpha = lit ? 1 : 0.75;
+    ctx.drawImage(e.flash > 0 ? solid(im, '#fff') : im, bx, by);
+    ctx.globalAlpha = 1;
+    e.drawAt = [bx + ox, by + oy];
+  },
+  // 被照亮时的金色轮廓：画在黑罩上面，再黑也看得清
+  emissive(e, ox, oy) {
+    if (!e.drawAt || !BOSS.night.lit(e)) return;
+    const f = Math.floor(G.t * 3) % 2, ol = rimImage(ART.boss.night[f], '#ffe9a0');
+    ctx.globalAlpha = 0.75 + Math.sin(G.t * 8) * 0.2;
+    ctx.drawImage(ol, Math.round(e.drawAt[0] - ox) - 2, Math.round(e.drawAt[1] - oy) - 2);
+    ctx.globalAlpha = 1;
+  },
+  light(e) { return BOSS.night.lit(e) ? { x: e.x, y: e.y - 16, r: 46, warm: 1, env: false } : null; },
   cleanup(R) { for (const q of R.ents) if (q.k === 'npc' && q.ally) q.dead = true; },
 };
+// 只有外轮廓的图（给“被照亮”用），按原图缓存
+const RIM_CACHE = new Map();
+function rimImage(im, col) {
+  const key = im; let c = RIM_CACHE.get(key);
+  if (c) return c;
+  const w = im.width + 4, h = im.height + 4, cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const x = cv.getContext('2d'), sil = solid(im, col);
+  for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) if (Math.abs(dx) + Math.abs(dy) <= 3 && (dx || dy)) x.drawImage(sil, 2 + dx, 2 + dy);
+  x.globalCompositeOperation = 'destination-out'; x.drawImage(im, 2, 2);
+  RIM_CACHE.set(key, cv);
+  return cv;
+}
 
 // 暗处发光的眼睛：画在黑罩上面，影子在黑里也看得见
 function drawEmissive(ox, oy) {
@@ -1097,6 +1247,7 @@ function drawEmissive(ox, oy) {
       else if (e.kind === 'frog' && e.st !== 'jump') eye(e.x + d * 3, e.y - 5, '#e4f8fc');
     } else if (e.k === 'boss' || e.k === 'clone') {
       if (e.k === 'boss' && e.kind === 'ke' || e.k === 'clone') eye(e.x + e.dir * 2, e.y - 7, e.k === 'clone' ? '#d6cfe0' : '#ffe27a', 3);
+      if (e.k === 'boss' && BOSS[e.kind].emissive) BOSS[e.kind].emissive(e, ox, oy);
       if (e.k === 'boss' && e.kind === 'night') { for (let i = 0; i < 5; i++) eye(e.x - 16 + i * 8, e.y - 26 + Math.sin(G.t * 2 + i) * 3, '#ff5a4f', 2); }
       if (e.k === 'boss' && e.kind === 'zhu' && e.phase === 3 && (e.st === 'tired' || e.st === 'stun')) eye(e.x + 3, e.y - 14, '#ffd166', 2);
     } else if (e.k === 'npc' && e.id === 'qiS') { eye(e.x + 1, e.y - 4, '#ffe27a'); eye(e.x + 3, e.y - 4, '#ffe27a'); }
